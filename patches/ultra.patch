@@ -75,6 +75,144 @@ index 00000000..2db2f509
 +        XCTAssertThrowsError(try UltraAppStorage.resolve(sharedURL: nil, localURL: self.localURL, savedMode: "local", allowLocalStorage: false))
 +    }
 +}
+diff --git a/Tests/UltraDiagnosticsTests/UltraDiagnosticsTests.swift b/Tests/UltraDiagnosticsTests/UltraDiagnosticsTests.swift
+new file mode 100644
+index 00000000..c7e21eda
+--- /dev/null
++++ b/Tests/UltraDiagnosticsTests/UltraDiagnosticsTests.swift
+@@ -0,0 +1,132 @@
++import Foundation
++import XCTest
++@testable import UltraDiagnostics
++
++final class UltraDiagnosticsTests: XCTestCase {
++    private var directory: URL!
++
++    override func setUpWithError() throws {
++        self.directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
++    }
++
++    override func tearDownWithError() throws {
++        if FileManager.default.fileExists(atPath: self.directory.path) {
++            try FileManager.default.removeItem(at: self.directory)
++        }
++    }
++
++    private func text(_ store: UltraDiagnosticsStore) throws -> String {
++        return String(decoding: try store.export(), as: UTF8.self)
++    }
++
++    func testDisabledByDefaultAndDoesNotRecord() throws {
++        let store = UltraDiagnosticsStore(directory: self.directory)
++        XCTAssertFalse(try store.isEnabled())
++        store.record(.startupBegan)
++        XCTAssertFalse(try self.text(store).contains("startupBegan"))
++    }
++
++    func testConsentAndEventsSurviveRelaunch() throws {
++        let first = UltraDiagnosticsStore(directory: self.directory)
++        try first.setEnabled(true)
++        first.record(.startupBegan)
++        let next = UltraDiagnosticsStore(directory: self.directory)
++        XCTAssertTrue(try next.isEnabled())
++        XCTAssertTrue(try self.text(next).contains("startupBegan"))
++    }
++
++    func testDisableRetainsOldEventsButStopsNewOnes() throws {
++        let store = UltraDiagnosticsStore(directory: self.directory)
++        try store.setEnabled(true)
++        store.record(.startupBegan)
++        try store.setEnabled(false)
++        store.record(.memoryWarning)
++        let text = try self.text(store)
++        XCTAssertTrue(text.contains("startupBegan"))
++        XCTAssertFalse(text.contains("memoryWarning"))
++    }
++
++    func testRotationBoundsDiskAndKeepsLatestEvents() throws {
++        let store = UltraDiagnosticsStore(directory: self.directory)
++        try store.setEnabled(true)
++        for _ in 0 ..< 700 { store.record(.foreground) }
++        store.record(.background)
++        let text = try self.text(store)
++        XCTAssertEqual(text.components(separatedBy: "\n").filter { $0.contains(" foreground") }.count, 499)
++        XCTAssertTrue(text.hasSuffix("background"))
++        let size = try self.directory.appendingPathComponent("events.json").resourceValues(forKeys: [.fileSizeKey]).fileSize!
++        XCTAssertLessThanOrEqual(size, 65536)
++    }
++
++    func testOldEventsExpireEvenWhenRecordingDisabled() throws {
++        var now = Date(timeIntervalSince1970: 1_800_000_000)
++        let store = UltraDiagnosticsStore(directory: self.directory, now: { now })
++        try store.setEnabled(true)
++        store.record(.startupBegan)
++        try store.setEnabled(false)
++        now.addTimeInterval(4 * 24 * 60 * 60)
++        store.record(.startupReady)
++        XCTAssertFalse(try self.text(store).contains("startupBegan"))
++        XCTAssertFalse(try self.text(store).contains("startupReady"))
++        let state = try String(contentsOf: self.directory.appendingPathComponent("events.json"), encoding: .utf8)
++        XCTAssertFalse(state.contains("startupBegan"))
++    }
++
++    func testClockRollbackDoesNotKeepFarFutureEvents() throws {
++        var now = Date(timeIntervalSince1970: 1_800_000_000)
++        let store = UltraDiagnosticsStore(directory: self.directory, now: { now })
++        try store.setEnabled(true)
++        store.record(.background)
++        now.addTimeInterval(-24 * 60 * 60)
++        XCTAssertFalse(try self.text(store).contains("background"))
++    }
++
++    func testClearPreservesConsentAndRemovesEvents() throws {
++        let store = UltraDiagnosticsStore(directory: self.directory)
++        try store.setEnabled(true)
++        store.record(.startupBlocked)
++        try store.clear()
++        XCTAssertTrue(try store.isEnabled())
++        XCTAssertFalse(try self.text(store).contains("startupBlocked"))
++        store.record(.startupReady)
++        XCTAssertTrue(try self.text(store).contains("startupReady"))
++    }
++
++    func testUnknownFieldsCannotBeExported() throws {
++        try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
++        let fake = "SYNTHETIC_SESSION_SECRET_FOR_TEST_ONLY"
++        let input: [String: Any] = ["enabled": false, "entries": [], "api_hash": fake, "phone": "+0000000000", "message": fake]
++        try JSONSerialization.data(withJSONObject: input).write(to: self.directory.appendingPathComponent("events.json"))
++        let output = try self.text(UltraDiagnosticsStore(directory: self.directory))
++        XCTAssertFalse(output.contains(fake))
++        XCTAssertFalse(output.contains("+0000000000"))
++        XCTAssertFalse(output.contains("api_hash"))
++    }
++
++    func testCorruptOrOversizedFileCanBeClearedWithoutCrashingStartup() throws {
++        try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
++        let file = self.directory.appendingPathComponent("events.json")
++        let store = UltraDiagnosticsStore(directory: self.directory)
++        for data in [Data("invalid json".utf8), Data(repeating: 65, count: 65537)] {
++            try data.write(to: file)
++            store.record(.startupBegan)
++            XCTAssertThrowsError(try store.export())
++            try store.clear()
++            XCTAssertFalse(try store.isEnabled())
++            XCTAssertFalse(try self.text(store).contains("startupBegan"))
++        }
++    }
++
++    func testUnknownEventFailsClosedAndDoesNotExportArbitraryText() throws {
++        try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
++        let input: [String: Any] = ["enabled": true, "entries": [["time": 0, "event": "SYNTHETIC_KEY_NOT_AN_EVENT"]]]
++        try JSONSerialization.data(withJSONObject: input).write(to: self.directory.appendingPathComponent("events.json"))
++        XCTAssertThrowsError(try UltraDiagnosticsStore(directory: self.directory).export())
++    }
++
++    func testStartupStagesUseClosedAllowlist() {
++        XCTAssertEqual(UltraDiagnosticsStore.Event(rawValue: "STORAGE_LOCAL"), .storageLocal)
++        XCTAssertEqual(UltraDiagnosticsStore.Event(rawValue: "AUTH_UI_READY"), .authUIReady)
++        XCTAssertNil(UltraDiagnosticsStore.Event(rawValue: "SYNTHETIC_PRIVATE_CONTENT"))
++    }
++}
 diff --git a/Tests/UltraStartupPreview/App.swift b/Tests/UltraStartupPreview/App.swift
 new file mode 100644
 index 00000000..1337c14a
@@ -382,12 +520,235 @@ index 00000000..d7594752
 +        XCTAssertThrowsError(try environment.configure(PasscodeConfiguration(appGroupIdentifier: "group.app.telegaultra.client", processRole: .mainApp, usePrivateKeychain: true), privateAccessGroup: { "TEAM.app.telegaultra.client" }))
 +    }
 +}
+diff --git a/submodules/SettingsUI/BUILD b/submodules/SettingsUI/BUILD
+index 2b819a9c..12b8e60c 100644
+--- a/submodules/SettingsUI/BUILD
++++ b/submodules/SettingsUI/BUILD
+@@ -91,6 +91,7 @@ swift_library(
+         "//submodules/AccountUtils:AccountUtils",
+         "//submodules/UIKitRuntimeUtils:UIKitRuntimeUtils",
+         "//submodules/DebugSettingsUI:DebugSettingsUI",
++        "//submodules/CrashReporting:CrashReporting",
+         "//submodules/WallpaperBackgroundNode:WallpaperBackgroundNode",
+         "//submodules/WebPBinding:WebPBinding",
+         "//submodules/Components/ReactionImageComponent:ReactionImageComponent",
+diff --git a/submodules/SettingsUI/Sources/UltraDiagnosticsController.swift b/submodules/SettingsUI/Sources/UltraDiagnosticsController.swift
+new file mode 100644
+index 00000000..96efaac1
+--- /dev/null
++++ b/submodules/SettingsUI/Sources/UltraDiagnosticsController.swift
+@@ -0,0 +1,205 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramPresentationData
++import TelegramUIPreferences
++import ItemListUI
++import AccountContext
++import DebugSettingsUI
++import CrashReporting
++import PresentationDataUtils
++
++private enum UltraDiagnosticAction: Int32 {
++    case exportLogs
++    case viewCrashes
++    case exportCrashes
++    case clear
++
++    var title: String {
++        switch self {
++        case .exportLogs: return "Сохранить журнал ULTRA"
++        case .viewCrashes: return "Просмотреть отчёты о сбоях"
++        case .exportCrashes: return "Сохранить отчёты о сбоях"
++        case .clear: return "Очистить журнал ULTRA"
++        }
++    }
++}
++
++private final class UltraDiagnosticsArguments {
++    let context: AccountContext
++    var present: (ViewController) -> Void = { _ in }
++    var push: (ViewController) -> Void = { _ in }
++    var refresh: () -> Void = {}
++    private var busy = false
++    private let queue = DispatchQueue(label: "app.telegaultra.diagnostic-export", qos: .utility)
++
++    init(context: AccountContext) {
++        self.context = context
++    }
++
++    func alert(_ text: String) {
++        self.present(textAlertController(context: self.context, title: "Диагностика ULTRA", text: text, actions: [
++            TextAlertAction(type: .defaultAction, title: self.context.sharedContext.currentPresentationData.with { $0 }.strings.Common_OK, action: {})
++        ]))
++    }
++
++    func updateRecording(_ value: Bool) {
++        do {
++            try UltraDiagnosticsStore.shared.setEnabled(value)
++        } catch {
++            self.alert("Не удалось изменить запись журнала. Можно попробовать очистить журнал и повторить действие.")
++        }
++        self.refresh()
++    }
++
++    func run(_ action: UltraDiagnosticAction) {
++        switch action {
++        case .viewCrashes:
++            self.push(crashReportsController(sharedContext: self.context.sharedContext, context: self.context))
++        case .clear:
++            self.present(textAlertController(context: self.context, title: "Очистить журнал?", text: "Будут удалены только локальные события ULTRA. Системные отчёты о сбоях управляются отдельно в их списке.", actions: [
++                TextAlertAction(type: .genericAction, title: self.context.sharedContext.currentPresentationData.with { $0 }.strings.Common_Cancel, action: {}),
++                TextAlertAction(type: .destructiveAction, title: "Очистить", action: { [weak self] in
++                    do {
++                        try UltraDiagnosticsStore.shared.clear()
++                        self?.alert("Журнал ULTRA очищен.")
++                    } catch {
++                        self?.alert("Не удалось очистить журнал.")
++                    }
++                    self?.refresh()
++                })
++            ]))
++        case .exportLogs:
++            self.export(crashes: false)
++        case .exportCrashes:
++            self.present(textAlertController(context: self.context, title: "Экспорт отчётов iOS", text: "Файл содержит доступные отчёты MetricKit: сведения об устройстве, время и стек вызовов. Сначала их можно просмотреть в списке отчётов. Передача выполняется только через выбранное вами действие.", actions: [
++                TextAlertAction(type: .genericAction, title: self.context.sharedContext.currentPresentationData.with { $0 }.strings.Common_Cancel, action: {}),
++                TextAlertAction(type: .defaultAction, title: "Продолжить", action: { [weak self] in self?.export(crashes: true) })
++            ]))
++        }
++    }
++
++    private func export(crashes: Bool) {
++        guard !self.busy else { return }
++        self.busy = true
++        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
++        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
++        let header = "ULTRA \(version) (\(build))\niOS \(UIDevice.current.systemVersion)\n\n"
++        self.queue.async {
++            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ULTRA-Export", isDirectory: true)
++            let file = directory.appendingPathComponent(crashes ? "ULTRA-crash-reports.txt" : "ULTRA-diagnostics.txt")
++            do {
++                var data = Data(header.utf8)
++                if crashes {
++                    let reports = try CrashReportStore.shared.reports()
++                    guard !reports.isEmpty else {
++                        DispatchQueue.main.async {
++                            self.busy = false
++                            self.alert("Отчётов пока нет. iOS передаёт отчёты с задержкой и не для каждого закрытия приложения.")
++                        }
++                        return
++                    }
++                    for report in reports.prefix(10) {
++                        let text = Data((report.text + "\n\n").utf8)
++                        guard data.count + text.count <= 10 * 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
++                        data.append(text)
++                    }
++                } else {
++                    data.append(try UltraDiagnosticsStore.shared.export())
++                }
++                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
++                // Fixed filenames bound leftover temporary exports if iOS terminates the share sheet.
++                try data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
++                DispatchQueue.main.async {
++                    let activity = UIActivityViewController(activityItems: [file], applicationActivities: nil)
++                    if let window = self.context.sharedContext.applicationBindings.getTopWindow() {
++                        activity.popoverPresentationController?.sourceView = window
++                        activity.popoverPresentationController?.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.maxY - 1, width: 1, height: 1)
++                    }
++                    activity.completionWithItemsHandler = { _, _, _, _ in
++                        self.queue.async { try? FileManager.default.removeItem(at: file) }
++                        self.busy = false
++                    }
++                    self.context.sharedContext.applicationBindings.presentNativeController(activity)
++                }
++            } catch {
++                try? FileManager.default.removeItem(at: file)
++                DispatchQueue.main.async {
++                    self.busy = false
++                    self.alert("Не удалось подготовить файл. Попробуйте очистить журнал или экспортировать отчёты отдельно.")
++                }
++            }
++        }
++    }
++}
++
++private enum UltraDiagnosticsEntry: ItemListNodeEntry {
++    case recording(Bool)
++    case note(Int32, Int32, String)
++    case action(UltraDiagnosticAction)
++
++    var stableId: Int32 {
++        switch self {
++        case .recording: return 0
++        case let .note(id, _, _): return id
++        case let .action(action): return 10 + action.rawValue
++        }
++    }
++
++    var section: ItemListSectionId {
++        switch self {
++        case .recording: return 0
++        case let .note(_, section, _): return section
++        case .action(.exportLogs): return 1
++        case .action(.viewCrashes), .action(.exportCrashes): return 2
++        case .action(.clear): return 3
++        }
++    }
++
++    static func < (lhs: UltraDiagnosticsEntry, rhs: UltraDiagnosticsEntry) -> Bool {
++        if lhs.section != rhs.section { return lhs.section < rhs.section }
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! UltraDiagnosticsArguments
++        switch self {
++        case let .recording(value):
++            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: "Записывать журнал ULTRA", value: value, sectionId: self.section, style: .blocks, updated: { arguments.updateRecording($0) })
++        case let .note(_, _, text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        case let .action(action):
++            return ItemListActionItem(presentationData: presentationData, systemStyle: .glass, title: action.title, kind: action == .clear ? .destructive : .generic, alignment: .natural, sectionId: self.section, style: .blocks, action: { arguments.run(action) })
++        }
++    }
++}
++
++func ultraDiagnosticsController(context: AccountContext) -> ViewController {
++    let arguments = UltraDiagnosticsArguments(context: context)
++    let revision = ValuePromise<Int>(0, ignoreRepeated: false)
++    arguments.refresh = { revision.set(0) }
++    let signal = combineLatest(context.sharedContext.presentationData, revision.get())
++    |> deliverOnMainQueue
++    |> map { presentationData, _ -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let presentationData = presentationData.withUpdated(theme: presentationData.theme.withModalBlocksBackground())
++        let enabled = (try? UltraDiagnosticsStore.shared.isEnabled()) ?? false
++        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
++        let entries: [UltraDiagnosticsEntry] = [
++            .recording(enabled),
++            .note(1, 0, "Только этапы запуска, сворачивание, предупреждения о памяти и использование настроек ULTRA. Без переписки, телефонов и ключей. Хранится до 3 дней, не более 500 событий / 64 КБ. Выключение записи сохраняет старые события до очистки или истечения срока."),
++            .action(.exportLogs),
++            .action(.viewCrashes),
++            .action(.exportCrashes),
++            .note(20, 2, "Отчёты iOS могут появиться позже и не охватывают каждое завершение приложения. Автоматической отправки нет."),
++            .action(.clear),
++            .note(30, 3, "Сборка \(build) · iOS \(UIDevice.current.systemVersion)\nСохранить файл можно через «Сохранить в Файлы» в системном меню.")
++        ]
++        let state = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text("Диагностика"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        return (state, (ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true), arguments))
++    }
++    let controller = ItemListController(context: context, state: signal)
++    arguments.push = { [weak controller] in controller?.push($0) }
++    arguments.present = { [weak controller] in controller?.present($0, in: .window(.root)) }
++    return controller
++}
 diff --git a/submodules/SettingsUI/Sources/UltraSettingsController.swift b/submodules/SettingsUI/Sources/UltraSettingsController.swift
 new file mode 100644
-index 00000000..324d0ac3
+index 00000000..d32767c0
 --- /dev/null
 +++ b/submodules/SettingsUI/Sources/UltraSettingsController.swift
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,191 @@
 +import Foundation
 +import UIKit
 +import Display
@@ -404,6 +765,7 @@ index 00000000..324d0ac3
 +    case ghost
 +    case privacy
 +    case additional
++    case diagnostics
 +
 +    var title: String {
 +        switch self {
@@ -412,6 +774,7 @@ index 00000000..324d0ac3
 +        case .ghost: return "Режим призрака"
 +        case .privacy: return "Конфиденциальность"
 +        case .additional: return "Дополнительно"
++        case .diagnostics: return "Диагностика"
 +        }
 +    }
 +}
@@ -515,14 +878,20 @@ index 00000000..324d0ac3
 +}
 +
 +public func ultraSettingsController(context: AccountContext) -> ViewController {
++    UltraDiagnosticsStore.shared.record(.settingsOpened)
 +    return ultraSettingsController(context: context, category: nil)
 +}
 +
 +private func ultraSettingsController(context: AccountContext, category: UltraCategory?) -> ViewController {
 +    var pushImpl: ((ViewController) -> Void)?
 +    let arguments = UltraSettingsArguments(open: { category in
-+        pushImpl?(ultraSettingsController(context: context, category: category))
++        if category == .diagnostics {
++            pushImpl?(ultraDiagnosticsController(context: context))
++        } else {
++            pushImpl?(ultraSettingsController(context: context, category: category))
++        }
 +    }, update: { option, value in
++        UltraDiagnosticsStore.shared.record(.optionChanged)
 +        let _ = updateExperimentalUISettingsInteractively(accountManager: context.sharedContext.accountManager, { settings in
 +            var settings = settings
 +            settings[keyPath: option.keyPath] = value
@@ -554,12 +923,14 @@ index 00000000..324d0ac3
 +                entries.append(.footer("Перед исходящим личным звонком появится подтверждение."))
 +            case .additional:
 +                entries.append(.footer("Изменения галереи применяются при следующем открытии вложений."))
++            case .diagnostics:
++                break
 +            }
 +        } else {
 +            entries = UltraCategory.allCases.map { .category($0) }
 +            entries.append(.footer("ULTRA — неофициальный клиент Telegram. Настройки сохраняются на этом устройстве для всех добавленных аккаунтов."))
 +        }
-+        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(category?.title ?? "ultra"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(category?.title ?? "ULTRA"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
 +        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
 +        return (controllerState, (listState, arguments))
 +    }
@@ -569,6 +940,35 @@ index 00000000..324d0ac3
 +    }
 +    return controller
 +}
+diff --git a/submodules/TelegramPresentationData/Sources/Resources/PresentationResourcesSettings.swift b/submodules/TelegramPresentationData/Sources/Resources/PresentationResourcesSettings.swift
+index 99175f0c..87334f19 100644
+--- a/submodules/TelegramPresentationData/Sources/Resources/PresentationResourcesSettings.swift
++++ b/submodules/TelegramPresentationData/Sources/Resources/PresentationResourcesSettings.swift
+@@ -117,6 +117,24 @@ let colorGray = UIColor(rgb: 0x8E8E93)
+ let colorViolet = UIColor(rgb: 0x5E5CE6)
+ 
+ public struct PresentationResourcesSettings {
++    public static let ultra: UIImage? = {
++        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 30.0, height: 30.0))
++        return renderer.image { _ in
++            UIColor(rgb: 0x5E5CE6).setFill()
++            UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: 30, height: 30), cornerRadius: 8).fill()
++            let bolt = UIBezierPath()
++            bolt.move(to: CGPoint(x: 17, y: 4))
++            bolt.addLine(to: CGPoint(x: 7, y: 17))
++            bolt.addLine(to: CGPoint(x: 14, y: 17))
++            bolt.addLine(to: CGPoint(x: 12, y: 26))
++            bolt.addLine(to: CGPoint(x: 23, y: 12))
++            bolt.addLine(to: CGPoint(x: 16, y: 12))
++            bolt.close()
++            UIColor.white.setFill()
++            bolt.fill()
++        }
++    }()
++
+     public static let proxy = renderSettingsIcon(name: "Item List/Icons/Proxy", backgroundColors: [colorGreen])
+     public static let savedMessages = renderSettingsIcon(name: "Item List/Icons/SavedMessages", backgroundColors: [colorBlue])
+     public static let recentCalls = renderSettingsIcon(name: "Item List/Icons/Phone", backgroundColors: [colorGreen])
 diff --git a/submodules/TelegramUI/Components/CameraScreen/Sources/CameraScreen.swift b/submodules/TelegramUI/Components/CameraScreen/Sources/CameraScreen.swift
 index 6c93e100..1f68f64e 100644
 --- a/submodules/TelegramUI/Components/CameraScreen/Sources/CameraScreen.swift
@@ -668,14 +1068,22 @@ index f1c1917b..480f2917 100644
              self.controller?.openAvatarForEditing()
          case .edit:
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
-index a4873696..eec73003 100644
+index a4873696..737ab302 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
-@@ -265,6 +265,9 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
+@@ -19,6 +19,7 @@ enum SettingsSection: Int, CaseIterable {
+     case phone
+     case accounts
+     case myProfile
++    case ultra
+     case wallet
+     case proxy
+     case apps
+@@ -265,6 +266,9 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
      items[.advanced]!.append(PeerInfoScreenDisclosureItem(id: 3, text: presentationData.strings.Settings_Appearance, icon: PresentationResourcesSettings.appearance, action: {
          interaction.openSettings(.appearance)
      }))
-+    items[.advanced]!.append(PeerInfoScreenDisclosureItem(id: 7, text: "ultra", icon: PresentationResourcesSettings.appearance, action: {
++    items[.ultra]!.append(PeerInfoScreenDisclosureItem(id: 0, text: "ULTRA", icon: PresentationResourcesSettings.ultra, action: {
 +        interaction.openSettings(.ultra)
 +    }))
      
@@ -1040,11 +1448,14 @@ index 00000000..d1042b6b
 +}
 diff --git a/submodules/TelegramUI/Sources/UltraStartupDiagnostics.swift b/submodules/TelegramUI/Sources/UltraStartupDiagnostics.swift
 new file mode 100644
-index 00000000..d7a2205b
+index 00000000..ed20c24f
 --- /dev/null
 +++ b/submodules/TelegramUI/Sources/UltraStartupDiagnostics.swift
-@@ -0,0 +1,160 @@
+@@ -0,0 +1,191 @@
 +import UIKit
++#if canImport(TelegramUIPreferences)
++import TelegramUIPreferences
++#endif
 +
 +// Startup metadata only: no API credentials, account IDs, messages or database paths.
 +final class UltraStartupDiagnostics {
@@ -1059,6 +1470,7 @@ index 00000000..d7a2205b
 +    private weak var mainWindow: UIWindow?
 +    private var diagnosticWindow: UIWindow?
 +    private var progressController: UltraStartupProgressViewController?
++    private var lifecycleObservers: [NSObjectProtocol] = []
 +
 +    private var reportURL: URL? {
 +        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -1067,6 +1479,22 @@ index 00000000..d7a2205b
 +    }
 +
 +    func begin() {
++        #if canImport(TelegramUIPreferences)
++        UltraDiagnosticsStore.clearTemporaryExports()
++        UltraDiagnosticsStore.shared.record(.startupBegan)
++        if self.lifecycleObservers.isEmpty {
++            let events: [(Notification.Name, UltraDiagnosticsStore.Event)] = [
++                (UIApplication.willEnterForegroundNotification, .foreground),
++                (UIApplication.didEnterBackgroundNotification, .background),
++                (UIApplication.didReceiveMemoryWarningNotification, .memoryWarning)
++            ]
++            for (name, event) in events {
++                self.lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in
++                    UltraDiagnosticsStore.shared.record(event)
++                })
++            }
++        }
++        #endif
 +        if let url = self.reportURL, let report = try? String(contentsOf: url, encoding: .utf8) {
 +            self.previousStage = report.components(separatedBy: "\n").first(where: { $0.hasPrefix("stage=") })
 +        }
@@ -1077,6 +1505,11 @@ index 00000000..d7a2205b
 +        precondition(Thread.isMainThread)
 +        guard !self.finished else { return }
 +        self.stage = stage
++        #if canImport(TelegramUIPreferences)
++        if let event = UltraDiagnosticsStore.Event(rawValue: stage) {
++            UltraDiagnosticsStore.shared.record(event)
++        }
++        #endif
 +        self.events.append(String(format: "%.3fs %@", Date().timeIntervalSince(self.started), stage))
 +        if self.events.count > 40 { self.events.removeFirst() }
 +        if let url = self.reportURL {
@@ -1104,6 +1537,9 @@ index 00000000..d7a2205b
 +    }
 +
 +    func showFailure(message: String, code: String, enableLocalStorage: (() -> Void)?) {
++        #if canImport(TelegramUIPreferences)
++        UltraDiagnosticsStore.shared.record(.startupBlocked)
++        #endif
 +        self.mark(code)
 +        self.failureController = UltraStartupFailureViewController(
 +            message: message, diagnosticCode: code, enableLocalStorage: enableLocalStorage,
@@ -1138,6 +1574,9 @@ index 00000000..d7a2205b
 +        guard self.failureController == nil, !self.finished else { return }
 +        self.mark(stage)
 +        self.finished = true
++        #if canImport(TelegramUIPreferences)
++        UltraDiagnosticsStore.shared.record(.startupReady)
++        #endif
 +        self.diagnosticWindow?.isHidden = true
 +        self.diagnosticWindow = nil
 +        self.progressController = nil
@@ -1326,6 +1765,154 @@ index c15a2bf2..167961b9 100644
  
          try container.encode((self.keepChatNavigationStack ? 1 : 0) as Int32, forKey: "keepChatNavigationStack")
          try container.encode((self.skipReadHistory ? 1 : 0) as Int32, forKey: "skipReadHistory")
+diff --git a/submodules/TelegramUIPreferences/Sources/UltraDiagnosticsStore.swift b/submodules/TelegramUIPreferences/Sources/UltraDiagnosticsStore.swift
+new file mode 100644
+index 00000000..c7fdc1ac
+--- /dev/null
++++ b/submodules/TelegramUIPreferences/Sources/UltraDiagnosticsStore.swift
+@@ -0,0 +1,142 @@
++import Foundation
++
++// Deliberately accepts no free-form text, identifiers, settings values or credentials.
++public final class UltraDiagnosticsStore {
++    public enum Event: String, Codable {
++        case startupBegan
++        case startupReady
++        case startupBlocked
++        case foreground
++        case background
++        case memoryWarning
++        case settingsOpened
++        case optionChanged
++        case recordingEnabled
++        case appDelegateEntered = "APP_DELEGATE_ENTERED"
++        case crashReportingReady = "CRASH_REPORTING_READY"
++        case windowHostCreating = "WINDOW_HOST_CREATING"
++        case metalInitializing = "METAL_INITIALIZING"
++        case metalReady = "METAL_READY"
++        case storageResolving = "STORAGE_RESOLVING"
++        case storageLocal = "STORAGE_LOCAL"
++        case storageShared = "STORAGE_SHARED"
++        case keychainReady = "KEYCHAIN_READY"
++        case databaseKeysInitializing = "DATABASE_KEYS_INITIALIZING"
++        case databaseKeysReady = "DATABASE_KEYS_READY"
++        case accountManagerInitializing = "ACCOUNT_MANAGER_INITIALIZING"
++        case accountManagerReady = "ACCOUNT_MANAGER_READY"
++        case presentationLoading = "PRESENTATION_LOADING"
++        case presentationReady = "PRESENTATION_READY"
++        case accountUIReady = "ACCOUNT_UI_READY"
++        case authUIReady = "AUTH_UI_READY"
++    }
++
++    private struct Entry: Codable, Equatable {
++        let time: Date
++        let event: Event
++    }
++
++    private struct State: Codable {
++        var enabled = false
++        var entries: [Entry] = []
++    }
++
++    public static let shared = UltraDiagnosticsStore(directory: URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).appendingPathComponent("Library/Application Support/ULTRA-EventLog", isDirectory: true))
++    private let directory: URL
++    private let now: () -> Date
++    private let queue = DispatchQueue(label: "app.telegaultra.diagnostics")
++    private let limit = 500
++    private let maximumBytes = 65536
++
++    public init(directory: URL, now: @escaping () -> Date = Date.init) {
++        self.directory = directory
++        self.now = now
++    }
++
++    private var file: URL { self.directory.appendingPathComponent("events.json") }
++
++    private func read() throws -> State {
++        guard FileManager.default.fileExists(atPath: self.file.path) else { return State() }
++        let size = try self.file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
++        guard size <= self.maximumBytes else { throw CocoaError(.fileReadTooLarge) }
++        return try JSONDecoder().decode(State.self, from: Data(contentsOf: self.file))
++    }
++
++    private func prune(_ state: inout State) {
++        let now = self.now()
++        state.entries = Array(state.entries.filter {
++            $0.time >= now.addingTimeInterval(-3 * 24 * 60 * 60) && $0.time <= now.addingTimeInterval(300)
++        }.suffix(self.limit))
++    }
++
++    private func write(_ state: State) throws {
++        let data = try JSONEncoder().encode(state)
++        guard data.count <= self.maximumBytes else { throw CocoaError(.fileWriteOutOfSpace) }
++        try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
++        var directory = self.directory
++        var values = URLResourceValues()
++        values.isExcludedFromBackup = true
++        try directory.setResourceValues(values)
++        #if os(iOS)
++        try data.write(to: self.file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
++        #else
++        try data.write(to: self.file, options: .atomic)
++        #endif
++    }
++
++    public func isEnabled() throws -> Bool {
++        return try self.queue.sync { try self.read().enabled }
++    }
++
++    public func setEnabled(_ enabled: Bool) throws {
++        try self.queue.sync {
++            var state = try self.read()
++            let wasEnabled = state.enabled
++            state.enabled = enabled
++            self.prune(&state)
++            if enabled && !wasEnabled { state.entries.append(Entry(time: self.now(), event: .recordingEnabled)) }
++            self.prune(&state)
++            try self.write(state)
++        }
++    }
++
++    // Diagnostics must never prevent the app from starting if its own file is unavailable.
++    public func record(_ event: Event) {
++        try? self.queue.sync {
++            var state = try self.read()
++            let previous = state.entries
++            if state.enabled { state.entries.append(Entry(time: self.now(), event: event)) }
++            self.prune(&state)
++            if state.entries != previous { try self.write(state) }
++        }
++    }
++
++    public func export() throws -> Data {
++        return try self.queue.sync {
++            var state = try self.read()
++            self.prune(&state)
++            try self.write(state)
++            // Re-encode typed data; never export the original file's unrecognised fields.
++            let formatter = ISO8601DateFormatter()
++            let lines = state.entries.map { "\(formatter.string(from: $0.time)) \($0.event.rawValue)" }
++            return Data((["ULTRA local diagnostics v1", "recording=\(state.enabled)", "retention=3 days; maximum=500 events / 64 KiB", ""] + lines).joined(separator: "\n").utf8)
++        }
++    }
++
++    public func clear() throws {
++        try self.queue.sync {
++            // Clearing also recovers a corrupt or oversized journal, retaining consent when readable.
++            let enabled = (try? self.read().enabled) ?? false
++            var state = State()
++            state.enabled = enabled
++            try self.write(state)
++        }
++    }
++
++    public static func clearTemporaryExports() {
++        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ULTRA-Export", isDirectory: true)
++        for name in ["ULTRA-diagnostics.txt", "ULTRA-crash-reports.txt"] {
++            try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
++        }
++    }
++}
 diff --git a/submodules/TelegramUIPreferences/Sources/UltraSettings.swift b/submodules/TelegramUIPreferences/Sources/UltraSettings.swift
 new file mode 100644
 index 00000000..76bcf686

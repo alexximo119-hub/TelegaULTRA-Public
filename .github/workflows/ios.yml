@@ -6,7 +6,7 @@ name: ULTRA encrypted iOS
         description: iPhone build number
         required: true
         type: string
-        default: '15'
+        default: '16'
 permissions:
   contents: read
 concurrency:
@@ -70,7 +70,7 @@ jobs:
         python3 -m unittest discover -s build-system/Make/tests
         python3 build-system/Make/PostboxImportCheck.py
         } > "$GITHUB_WORKSPACE/private-logs/verify-python-build-helpers.log" 2>&1
-    - name: Verify startup storage invariants
+    - name: Verify startup storage and diagnostic journal invariants
       run: |
         {
         python3 scripts/test_startup.py

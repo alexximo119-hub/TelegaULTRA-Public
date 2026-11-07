@@ -15,7 +15,7 @@ The repository contains only the public encryption recipient. Keep the private i
 
 ## Validation and artifacts
 
-The workflow runs the build-helper tests, storage/Keychain tests and encrypted-artifact tests. It builds the complete simulator client, checks the visible missing-App-Group and local-storage welcome screens in a separate runner, and then compiles and inspects the iPhone IPA. Compilation does not establish GBox signing compatibility or physical-device behavior.
+The workflow runs the build-helper tests, storage/Keychain tests, diagnostic-journal tests and encrypted-artifact tests. It builds the complete simulator client, checks the visible missing-App-Group and local-storage welcome screens in a separate runner, and then compiles and inspects the iPhone IPA. Compilation does not establish GBox signing compatibility or physical-device behavior.
 
 Build outputs, screenshots and detailed logs are uploaded only as age-encrypted ZIP bundles. Public Actions pages show step names, status and generic tool setup output. Commands that may handle API-bearing generated source write their output to encrypted private logs.
 
@@ -24,6 +24,10 @@ Download the artifact, extract its `.age` file and use `scripts/sealed_artifacts
 The decrypted `artifacts/ULTRA-unsigned.ipa` must be signed before installation. Its identity is `app.telegaultra.client`, displayed as ULTRA. A new installation without App Groups can explicitly choose local storage, fully close the application and reopen it. Widgets and extensions cannot share the local database; push notifications need separate compatible provisioning and APNs configuration. Existing shared storage is never silently replaced with a new local database by this patch.
 
 ## Privacy boundary
+
+ULTRA has its own settings block below the profile. **ULTRA → Диагностика** provides an opt-in local event journal, file export, clearing, and access to existing iOS crash reports. The journal records a closed list of technical events, never free-form messages, account identifiers or credentials. It retains at most 500 events for three days, with a 64 KiB file limit; expiry is enforced at the next journal access or launch. Recording is off by default. Disabling it retains existing events until expiry or clearing. Temporary share files are removed when sharing finishes or the app next launches; copies saved by the user remain under the user's control.
+
+Crash reports are separate from the ULTRA journal. Their explicit export contains iOS/device metadata and stack information, with a confirmation before opening the system share sheet. iOS can deliver these reports late and does not report every termination. No automatic upload is added. The existing crash-report screen also offers its own reviewed, user-confirmed sending actions.
 
 Telegram API parameters are embedded in compiled applications. Anyone receiving a decrypted IPA may extract them. Keeping them in Actions Secrets protects source files and CI configuration; encrypting published artifacts prevents public downloads from exposing the embedded values. Do not publish decrypted binaries, private identities, generated build configuration, signing material or account/session data.
 

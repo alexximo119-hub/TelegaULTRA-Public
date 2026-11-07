@@ -1,4 +1,4 @@
-"""Run the real storage policy and PasscodeCore tests without TelegramCore UI dependencies."""
+"""Run storage, diagnostic journal and PasscodeCore tests without UI dependencies."""
 
 import json
 from pathlib import Path
@@ -17,6 +17,13 @@ def main() -> None:
         targets = {
             'Sources/UltraStartupPolicy': [source / 'submodules/TelegramUI/Sources/UltraAppStorage.swift'],
             'Tests/UltraStartupPolicyTests': [source / 'Tests/UltraAppStorageTests/UltraAppStorageTests.swift'],
+            'Sources/UltraDiagnostics': [
+                source / 'submodules/TelegramUIPreferences/Sources'
+                / 'UltraDiagnosticsStore.swift',
+            ],
+            'Tests/UltraDiagnosticsTests': [
+                source / 'Tests/UltraDiagnosticsTests/UltraDiagnosticsTests.swift',
+            ],
             'Sources/PasscodeCore': [source / 'submodules/PasscodeCore/Sources' / name for name in (
                 'Passcode.swift', 'PasscodeCrypto.swift', 'PasscodeKeychainScope.swift',
             )],
@@ -37,6 +44,8 @@ let package = Package(
     targets: [
         .target(name: "UltraStartupPolicy"),
         .testTarget(name: "UltraStartupPolicyTests", dependencies: ["UltraStartupPolicy"]),
+        .target(name: "UltraDiagnostics"),
+        .testTarget(name: "UltraDiagnosticsTests", dependencies: ["UltraDiagnostics"]),
         .target(name: "PasscodeCore", dependencies: [.product(name: "SwiftSignalKit", package: "SSignalKit")]),
         .testTarget(name: "PasscodeCoreTests", dependencies: ["PasscodeCore"])
     ]
