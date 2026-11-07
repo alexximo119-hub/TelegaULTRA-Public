@@ -1,0 +1,22 @@
+diff --git a/apple/internal/ios_rules.bzl b/apple/internal/ios_rules.bzl
+index 7d2f703..583b14c 100644
+--- a/apple/internal/ios_rules.bzl
++++ b/apple/internal/ios_rules.bzl
+@@ -449,7 +449,7 @@ def _ios_application_impl(ctx):
+         ),
+     )
+ 
+-    if platform_prerequisites.platform.is_device:
++    if platform_prerequisites.platform.is_device and "disable_legacy_signing" not in features:
+         processor_partials.append(
+             partials.provisioning_profile_partial(
+                 actions = actions,
+@@ -1430,7 +1430,7 @@ def _ios_extension_impl(ctx):
+         ),
+     ]
+ 
+-    if platform_prerequisites.platform.is_device:
++    if platform_prerequisites.platform.is_device and "disable_legacy_signing" not in features:
+         processor_partials.append(
+             partials.provisioning_profile_partial(
+                 actions = actions,

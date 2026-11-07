@@ -1,0 +1,291 @@
+name: ULTRA encrypted iOS
+'on':
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: iPhone build number
+        required: true
+        type: string
+        default: '15'
+permissions:
+  contents: read
+concurrency:
+  group: ultra-ios
+  cancel-in-progress: false
+env:
+  ULTRA_BUILD_NUMBER: ${{ inputs.build_number }}
+jobs:
+  simulator-build:
+    runs-on: xcode-27
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Checkout ULTRA build files
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: 'false'
+    - name: Prepare private logs
+      run: |-
+        mkdir -p private-logs
+        [[ "$ULTRA_BUILD_NUMBER" =~ ^[1-9][0-9]{0,3}$ ]]
+    - name: Checkout pinned official source
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: TelegramMessenger/Telegram-iOS
+        ref: 279f89e4d4f63f17227bf877dc3d8990f22ecd58
+        path: source
+        submodules: recursive
+        persist-credentials: 'false'
+    - name: Set Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: '3.13'
+    - name: Install checksum-pinned age
+      run: python3 scripts/install_age.py
+    - name: Verify artifact confidentiality
+      run: python3 -m unittest discover -s tests -v
+    - name: Check toolchain and capacity
+      run: |
+        set -euo pipefail
+        XCODE_VERSION=$(python3 -c 'import json; print(json.load(open("source/versions.json"))["xcode"])')
+        sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+        xcodebuild -version
+        python3 --version
+        df -h .
+        sysctl hw.memsize hw.ncpu
+    - name: Apply ULTRA and configure unsigned build
+      env:
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+      run: |
+        {
+        python3 scripts/prepare_source.py --source source
+        } > "$GITHUB_WORKSPACE/private-logs/apply-ultra-and-configure-unsigned-build.log" 2>&1
+    - name: Verify Python build helpers
+      working-directory: source
+      run: |
+        {
+        python3 -m unittest discover -s build-system/Make/tests
+        python3 build-system/Make/PostboxImportCheck.py
+        } > "$GITHUB_WORKSPACE/private-logs/verify-python-build-helpers.log" 2>&1
+    - name: Verify startup storage invariants
+      run: |
+        {
+        python3 scripts/test_startup.py
+        } > "$GITHUB_WORKSPACE/private-logs/verify-startup-storage-invariants.log" 2>&1
+    - name: Install screen recognition tool
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: '1'
+      run: |
+        brew install tesseract
+        tesseract --version
+    - name: Render startup diagnostic screen
+      run: |
+        {
+        python3 scripts/preview_startup.py
+        } > "$GITHUB_WORKSPACE/private-logs/render-startup-diagnostic-screen.log" 2>&1
+    - name: Compile complete simulator client
+      working-directory: source
+      run: |
+        {
+        set -euo pipefail
+        python3 -u build-system/Make/Make.py build \
+          --configurationPath=build-input/ultra-configuration.json \
+          --unsigned \
+          --buildNumber="$ULTRA_BUILD_NUMBER" \
+          --configuration=debug_sim_arm64 \
+          --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts/simulator"
+        } > "$GITHUB_WORKSPACE/private-logs/compile-complete-simulator-client.log" 2>&1
+    - name: Preserve complete simulator client
+      run: cp source/versions.json artifacts/simulator/versions.json
+    - name: Encrypt artifacts and private logs
+      if: always()
+      run: python3 scripts/sealed_artifacts.py seal --include artifacts --include private-logs --recipient ci/artifact-recipient.txt --output
+        sealed/simulator.zip.age
+    - name: Upload encrypted artifact only
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: ULTRA-simulator-${{ github.run_id }}
+        path: sealed/simulator.zip.age
+        compression-level: 0
+        if-no-files-found: ignore
+        retention-days: 1
+    if: ${{ github.actor == github.repository_owner }}
+  startup-check:
+    needs: simulator-build
+    runs-on: xcode-27
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Checkout ULTRA checks
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: 'false'
+    - name: Prepare private logs
+      run: |-
+        mkdir -p private-logs
+        [[ "$ULTRA_BUILD_NUMBER" =~ ^[1-9][0-9]{0,3}$ ]]
+    - name: Set Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: '3.13'
+    - name: Install checksum-pinned age
+      run: python3 scripts/install_age.py
+    - name: Download encrypted simulator client
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ULTRA-simulator-${{ github.run_id }}
+        path: sealed-input
+    - name: Restore encrypted artifact inside runner
+      env:
+        ULTRA_ARTIFACT_IDENTITY: ${{ secrets.ULTRA_ARTIFACT_IDENTITY }}
+      run: python3 scripts/sealed_artifacts.py open --input sealed-input/simulator.zip.age --output restored --identity-env ULTRA_ARTIFACT_IDENTITY
+        > private-logs/restore.log 2>&1
+    - name: Preserve verified evidence files
+      run: |
+        python3 - <<'PY'
+        import shutil
+        from pathlib import Path
+
+        output = Path("artifacts")
+        output.mkdir(exist_ok=True)
+        for path in Path("restored/artifacts").iterdir():
+            if path.is_file():
+                shutil.copy2(path, output / path.name)
+        PY
+    - name: Select matching Xcode
+      run: |
+        set -euo pipefail
+        XCODE_VERSION=$(python3 -c 'import json; print(json.load(open("restored/artifacts/simulator/versions.json"))["xcode"])')
+        sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+        xcodebuild -version
+        df -h .
+        sysctl hw.memsize hw.ncpu
+    - name: Install screen recognition tool
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: '1'
+      run: brew install tesseract
+    - name: Verify complete client startup and visible screens
+      run: |
+        {
+        python3 scripts/check_full_startup.py restored/artifacts/simulator/Telegram.ipa
+        } > "$GITHUB_WORKSPACE/private-logs/verify-complete-client-startup-and-visible-screens.log" 2>&1
+    - name: Encrypt artifacts and private logs
+      if: always()
+      run: python3 scripts/sealed_artifacts.py seal --include artifacts --include private-logs --recipient ci/artifact-recipient.txt --output
+        sealed/startup.zip.age
+    - name: Upload encrypted artifact only
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: ULTRA-startup-${{ github.run_id }}
+        path: sealed/startup.zip.age
+        compression-level: 0
+        if-no-files-found: ignore
+        retention-days: 1
+  device-build:
+    needs: startup-check
+    runs-on: xcode-27
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Checkout ULTRA build files
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: 'false'
+    - name: Prepare private logs
+      run: |-
+        mkdir -p private-logs
+        [[ "$ULTRA_BUILD_NUMBER" =~ ^[1-9][0-9]{0,3}$ ]]
+    - name: Checkout pinned official source
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: TelegramMessenger/Telegram-iOS
+        ref: 279f89e4d4f63f17227bf877dc3d8990f22ecd58
+        path: source
+        submodules: recursive
+        persist-credentials: 'false'
+    - name: Set Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: '3.13'
+    - name: Install checksum-pinned age
+      run: python3 scripts/install_age.py
+    - name: Check toolchain and capacity
+      run: |
+        set -euo pipefail
+        XCODE_VERSION=$(python3 -c 'import json; print(json.load(open("source/versions.json"))["xcode"])')
+        sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+        xcodebuild -version
+        python3 --version
+        df -h .
+        sysctl hw.memsize hw.ncpu
+    - name: Apply ULTRA and configure unsigned build
+      env:
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+      run: |
+        {
+        python3 scripts/prepare_source.py --source source
+        } > "$GITHUB_WORKSPACE/private-logs/apply-ultra-and-configure-unsigned-build.log" 2>&1
+    - name: Download encrypted complete-client evidence
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ULTRA-startup-${{ github.run_id }}
+        path: sealed-input
+    - name: Restore encrypted artifact inside runner
+      env:
+        ULTRA_ARTIFACT_IDENTITY: ${{ secrets.ULTRA_ARTIFACT_IDENTITY }}
+      run: python3 scripts/sealed_artifacts.py open --input sealed-input/startup.zip.age --output restored --identity-env ULTRA_ARTIFACT_IDENTITY
+        > private-logs/restore.log 2>&1
+    - name: Preserve verified evidence files
+      run: |
+        python3 - <<'PY'
+        import shutil
+        from pathlib import Path
+
+        output = Path("artifacts")
+        output.mkdir(exist_ok=True)
+        for path in Path("restored/artifacts").iterdir():
+            if path.is_file():
+                shutil.copy2(path, output / path.name)
+        PY
+    - name: Compile iPhone IPA
+      working-directory: source
+      run: |
+        {
+        set -euo pipefail
+        python3 -u build-system/Make/Make.py build \
+          --configurationPath=build-input/ultra-configuration.json \
+          --unsigned \
+          --buildNumber="$ULTRA_BUILD_NUMBER" \
+          --configuration=release_arm64 \
+          --outputBuildArtifactsPath="$GITHUB_WORKSPACE/artifacts"
+        mv "$GITHUB_WORKSPACE/artifacts/Telegram.ipa" "$GITHUB_WORKSPACE/artifacts/ULTRA-unsigned.ipa"
+        } > "$GITHUB_WORKSPACE/private-logs/compile-iphone-ipa.log" 2>&1
+    - name: Inspect packaged main application
+      run: |
+        {
+        python3 scripts/verify_ipa.py artifacts/ULTRA-unsigned.ipa \
+          --build-number="$ULTRA_BUILD_NUMBER" --report=artifacts/ipa-verification.json
+        } > "$GITHUB_WORKSPACE/private-logs/inspect-packaged-main-application.log" 2>&1
+    - name: Encrypt artifacts and private logs
+      if: always()
+      run: python3 scripts/sealed_artifacts.py seal --include artifacts --include private-logs --recipient ci/artifact-recipient.txt --output
+        sealed/release.zip.age
+    - name: Upload encrypted artifact only
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: ULTRA-iOS-${{ inputs.build_number }}-encrypted
+        path: sealed/release.zip.age
+        compression-level: 0
+        if-no-files-found: ignore
+        retention-days: 1

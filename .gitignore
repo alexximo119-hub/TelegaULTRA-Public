@@ -1,0 +1,17 @@
+/artifacts/
+/source/
+/private-logs/
+/restored/
+/sealed/
+/sealed-input/
+/.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.ipa
+*.p12
+*.pfx
+*.mobileprovision
+*.key
+*identity*.txt

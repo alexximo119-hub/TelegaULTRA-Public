@@ -1,0 +1,1374 @@
+diff --git a/Telegram/BUILD b/Telegram/BUILD
+index 1ac8279b..33cdcb76 100644
+--- a/Telegram/BUILD
++++ b/Telegram/BUILD
+@@ -641,7 +641,7 @@ plist_fragment(
+     template =
+     """
+     <key>CFBundleDisplayName</key>
+-    <string>Telegram</string>
++    <string>ULTRA</string>
+     """
+ )
+ 
+@@ -1696,11 +1696,13 @@ plist_fragment(
+     <key>CFBundleDevelopmentRegion</key>
+     <string>en</string>
+     <key>CFBundleDisplayName</key>
+-    <string>Telegram</string>
++    <string>ULTRA</string>
++    <key>ULTRAAllowLocalStorage</key>
++    <true/>
+     <key>CFBundleIdentifier</key>
+     <string>{telegram_bundle_id}</string>
+     <key>CFBundleName</key>
+-    <string>Telegram</string>
++    <string>ULTRA</string>
+     <key>CFBundlePackageType</key>
+     <string>APPL</string>
+     <key>CFBundleSignature</key>
+diff --git a/Tests/UltraAppStorageTests/UltraAppStorageTests.swift b/Tests/UltraAppStorageTests/UltraAppStorageTests.swift
+new file mode 100644
+index 00000000..2db2f509
+--- /dev/null
++++ b/Tests/UltraAppStorageTests/UltraAppStorageTests.swift
+@@ -0,0 +1,42 @@
++import Foundation
++import XCTest
++@testable import UltraStartupPolicy
++
++final class UltraAppStorageTests: XCTestCase {
++    private let sharedURL = URL(fileURLWithPath: "/test/shared")
++    private let localURL = URL(fileURLWithPath: "/test/local")
++
++    func testNewInstallationUsesAvailableAppGroup() throws {
++        let result = try UltraAppStorage.resolve(sharedURL: self.sharedURL, localURL: self.localURL, savedMode: nil, allowLocalStorage: true)
++        XCTAssertEqual(result.mode, .shared)
++        XCTAssertEqual(result.url, self.sharedURL)
++    }
++
++    func testMissingGroupRequiresExplicitLocalConsent() {
++        XCTAssertThrowsError(try UltraAppStorage.resolve(sharedURL: nil, localURL: self.localURL, savedMode: nil, allowLocalStorage: true)) { error in
++            guard case UltraAppStorageError.localStorageConsentRequired = error else {
++                return XCTFail("Expected local storage consent, got \(error)")
++            }
++        }
++    }
++
++    func testSharedInstallationNeverSilentlySwitchesToEmptyLocalStore() {
++        XCTAssertThrowsError(try UltraAppStorage.resolve(sharedURL: nil, localURL: self.localURL, savedMode: "shared", allowLocalStorage: true)) { error in
++            guard case UltraAppStorageError.sharedContainerUnavailable = error else {
++                return XCTFail("Expected unavailable shared storage, got \(error)")
++            }
++        }
++    }
++
++    func testLocalChoiceStaysLocalAfterSigningChanges() throws {
++        let result = try UltraAppStorage.resolve(sharedURL: self.sharedURL, localURL: self.localURL, savedMode: "local", allowLocalStorage: true)
++        XCTAssertEqual(result.mode, .local)
++        XCTAssertEqual(result.url, self.localURL)
++    }
++
++    func testInvalidModeAndUnavailableLocalDirectoryFailClosed() {
++        XCTAssertThrowsError(try UltraAppStorage.resolve(sharedURL: self.sharedURL, localURL: self.localURL, savedMode: "unknown", allowLocalStorage: true))
++        XCTAssertThrowsError(try UltraAppStorage.resolve(sharedURL: nil, localURL: nil, savedMode: "local", allowLocalStorage: true))
++        XCTAssertThrowsError(try UltraAppStorage.resolve(sharedURL: nil, localURL: self.localURL, savedMode: "local", allowLocalStorage: false))
++    }
++}
+diff --git a/Tests/UltraStartupPreview/App.swift b/Tests/UltraStartupPreview/App.swift
+new file mode 100644
+index 00000000..1337c14a
+--- /dev/null
++++ b/Tests/UltraStartupPreview/App.swift
+@@ -0,0 +1,39 @@
++import UIKit
++
++@main
++final class UltraStartupPreviewApp: UIResponder, UIApplicationDelegate {
++    var window: UIWindow?
++
++    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
++        UltraStartupDiagnostics.shared.begin()
++        if CommandLine.arguments.contains("--preview-progress") {
++            UltraStartupDiagnostics.shared.mark("PRESENTATION_LOADING")
++            return true
++        }
++        if CommandLine.arguments.contains("--preview-no-consent") {
++            UltraStartupDiagnostics.shared.showFailure(message: "Не удалось настроить защищённое хранилище ключей. Разблокируйте iPhone и проверьте параметры подписи приложения. Защита кодом и шифрование не отключались.", code: "KEYCHAIN_UNAVAILABLE", enableLocalStorage: nil)
++            return true
++        }
++        UltraStartupDiagnostics.shared.showFailure(message: "Подпись приложения не даёт доступ к общему контейнеру App Group. Для новой установки можно выбрать отдельное локальное хранилище ULTRA. Расширения, виджеты и общий доступ к данным будут недоступны. Данные из прежнего общего контейнера не будут перенесены. Если вы уже входили в аккаунт в этой установке, сначала восстановите прежнюю подпись.", code: "APP_GROUP_UNAVAILABLE", enableLocalStorage: {})
++        return true
++    }
++
++    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
++        let configuration = UISceneConfiguration(name: "Default Configuration", sessionRole: connectingSceneSession.role)
++        configuration.delegateClass = UltraPreviewSceneDelegate.self
++        return configuration
++    }
++}
++
++@objc(UltraPreviewSceneDelegate) final class UltraPreviewSceneDelegate: UIResponder, UIWindowSceneDelegate {
++    var window: UIWindow?
++
++    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
++        guard let scene = scene as? UIWindowScene else { return }
++        let window = UIWindow(windowScene: scene)
++        window.rootViewController = UIViewController()
++        self.window = window
++        window.makeKeyAndVisible()
++        UltraStartupDiagnostics.shared.attach(scene: scene, mainWindow: window)
++    }
++}
+diff --git a/build-system/Make/Make.py b/build-system/Make/Make.py
+index 4c3a6419..73a456d2 100644
+--- a/build-system/Make/Make.py
++++ b/build-system/Make/Make.py
+@@ -403,6 +403,8 @@ def clean(bazel, arguments):
+ 
+ 
+ def resolve_codesigning(arguments, base_path, build_configuration, provisioning_profiles_path, additional_codesigning_output_path) -> ResolvedCodesigningData:
++    if getattr(arguments, 'unsigned', False):
++        return ResolvedCodesigningData(aps_environment='production', use_xcode_managed_codesigning=False)
+     profile_source = None
+     if arguments.gitCodesigningRepository is not None:
+         password = os.getenv('TELEGRAM_CODESIGNING_GIT_PASSWORD')
+@@ -454,6 +456,9 @@ def resolve_codesigning(arguments, base_path, build_configuration, provisioning_
+ 
+ 
+ def resolve_configuration(base_path, bazel_command_line: BazelCommandLine, arguments, additional_codesigning_output_path):
++    if getattr(arguments, 'unsigned', False) and bazel_command_line is not None:
++        bazel_command_line.set_disable_provisioning_profiles()
++        bazel_command_line.common_args += ['--features=disable_legacy_signing']
+     configuration_repository_path = '{}/build-input/configuration-repository'.format(base_path)
+     os.makedirs(configuration_repository_path, exist_ok=True)
+ 
+@@ -821,6 +826,11 @@ def add_codesigning_common_arguments(current_parser: argparse.ArgumentParser):
+     )
+ 
+     codesigning_group = current_parser.add_mutually_exclusive_group(required=True)
++    codesigning_group.add_argument(
++        '--unsigned',
++        action='store_true',
++        help='Build without signing or provisioning profiles for later re-signing. The IPA cannot be installed as-is.'
++    )
+     codesigning_group.add_argument(
+         '--gitCodesigningRepository',
+         help='''
+diff --git a/build-system/Make/tests/test_unsigned_build.py b/build-system/Make/tests/test_unsigned_build.py
+new file mode 100644
+index 00000000..2720bfde
+--- /dev/null
++++ b/build-system/Make/tests/test_unsigned_build.py
+@@ -0,0 +1,61 @@
++import argparse
++from contextlib import redirect_stderr
++import io
++import json
++from pathlib import Path
++import sys
++import tempfile
++import unittest
++from unittest.mock import Mock, patch
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++# VM locking uses fcntl on macOS; these tests exercise configuration only.
++if sys.platform == 'win32':
++    with patch.dict(sys.modules, {'TartBuild': Mock()}):
++        import Make
++else:
++    import Make
++
++
++class UnsignedBuildTests(unittest.TestCase):
++    def test_unsigned_does_not_resolve_private_signing_material(self):
++        data = Make.resolve_codesigning(
++            argparse.Namespace(unsigned=True), None, None, None, None
++        )
++        self.assertEqual(data.aps_environment, 'production')
++        self.assertFalse(data.use_xcode_managed_codesigning)
++
++    def test_unsigned_is_exclusive_with_signing_directory(self):
++        parser = argparse.ArgumentParser()
++        Make.add_codesigning_common_arguments(parser)
++        with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
++            parser.parse_args([
++                '--configurationPath=config.json', '--unsigned',
++                '--codesigningInformationPath=certificates',
++            ])
++
++    def test_unsigned_configuration_has_own_identity_and_no_profiles(self):
++        with tempfile.TemporaryDirectory() as directory:
++            root = Path(directory)
++            configuration = root / 'configuration.json'
++            template = Path(__file__).resolve().parents[2] / 'appstore-configuration.json'
++            settings = json.loads(template.read_text(encoding='utf-8'))
++            settings['bundle_id'] = 'app.telegaultra.client'
++            configuration.write_text(json.dumps(settings), encoding='utf-8')
++            bazel = Mock()
++            bazel.bazel = '/test/bazel'
++            bazel.common_args = []
++            Make.resolve_configuration(
++                str(root), bazel,
++                argparse.Namespace(unsigned=True, configurationPath=str(configuration)),
++                None,
++            )
++            bazel.set_disable_provisioning_profiles.assert_called_once()
++            self.assertIn('--features=disable_legacy_signing', bazel.common_args)
++            output = root / 'build-input' / 'configuration-repository'
++            self.assertIn('app.telegaultra.client', (output / 'variables.bzl').read_text())
++            self.assertEqual(list((output / 'provisioning').glob('*.mobileprovision')), [])
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/submodules/ChatListUI/Sources/ChatListControllerNode.swift b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+index 594f3702..ff47cf98 100644
+--- a/submodules/ChatListUI/Sources/ChatListControllerNode.swift
++++ b/submodules/ChatListUI/Sources/ChatListControllerNode.swift
+@@ -607,6 +607,7 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
+         let maxFilterIndex = min(Int(filtersLimit), self.availableFilters.count) - 1
+ 
+         let canOpenStoryCamera = self.validLayout?.0.metrics.widthClass == .compact
++            && !self.context.sharedContext.immediateExperimentalUISettings.ultra.disableCameraSwipe
+             && self.availableFilters.first?.id == self.selectedId
+             && !recognizer.currentAllowedDirections.intersection(.right).isEmpty
+             && self.controller?.isStoryPostingAvailable == true
+diff --git a/submodules/LegacyComponents/PublicHeaders/LegacyComponents/TGVideoMessageCaptureController.h b/submodules/LegacyComponents/PublicHeaders/LegacyComponents/TGVideoMessageCaptureController.h
+index 99af708e..b52699c4 100644
+--- a/submodules/LegacyComponents/PublicHeaders/LegacyComponents/TGVideoMessageCaptureController.h
++++ b/submodules/LegacyComponents/PublicHeaders/LegacyComponents/TGVideoMessageCaptureController.h
+@@ -36,6 +36,7 @@
+ - (instancetype)initWithContext:(id<LegacyComponentsContext>)context forStory:(bool)forStory assets:(TGVideoMessageCaptureControllerAssets *)assets transitionInView:(UIView *(^)(void))transitionInView parentController:(TGViewController *)parentController controlsFrame:(CGRect)controlsFrame isAlreadyLocked:(bool (^)(void))isAlreadyLocked liveUploadInterface:(id<TGLiveUploadInterface>)liveUploadInterface pallete:(TGModernConversationInputMicPallete *)pallete slowmodeTimestamp:(int32_t)slowmodeTimestamp slowmodeView:(UIView *(^)(void))slowmodeView canSendSilently:(bool)canSendSilently canSchedule:(bool)canSchedule reminder:(bool)reminder;
+     
+ - (void)buttonInteractionUpdate:(CGPoint)value;
++- (void)useRearCameraInitially;
+ - (void)setLocked;
+ 
+ - (CGRect)frameForSendButton;
+diff --git a/submodules/LegacyComponents/Sources/TGVideoMessageCaptureController.m b/submodules/LegacyComponents/Sources/TGVideoMessageCaptureController.m
+index e255fd4a..d2f4808f 100644
+--- a/submodules/LegacyComponents/Sources/TGVideoMessageCaptureController.m
++++ b/submodules/LegacyComponents/Sources/TGVideoMessageCaptureController.m
+@@ -227,6 +227,14 @@ typedef enum
+     return [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:[[NSString alloc] initWithFormat:@"cam_%x.mp4", (int)arc4random()]]];
+ }
+ 
++- (void)useRearCameraInitially
++{
++    _preferredPosition = AVCaptureDevicePositionBack;
++    if (_capturePipeline != nil) {
++        [_capturePipeline setCameraPosition:_preferredPosition];
++    }
++}
++
+ - (void)setPallete:(TGModernConversationInputMicPallete *)pallete {
+     _pallete = pallete;
+     
+diff --git a/submodules/MediaPickerUI/Sources/MediaPickerScreen.swift b/submodules/MediaPickerUI/Sources/MediaPickerScreen.swift
+index ff522af2..159e8090 100644
+--- a/submodules/MediaPickerUI/Sources/MediaPickerScreen.swift
++++ b/submodules/MediaPickerUI/Sources/MediaPickerScreen.swift
+@@ -509,6 +509,7 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
+                 }
+                 updatedState = combineLatest(mediaAssetsContext.mediaAccess(), mediaAssetsContext.cameraAccess())
+                 |> mapToSignal { mediaAccess, cameraAccess -> Signal<State, NoError> in
++                    let cameraAccess = controller.context.sharedContext.immediateExperimentalUISettings.ultra.hideGalleryCamera ? nil : cameraAccess
+                     if case .notDetermined = mediaAccess {
+                         return .single(.assets(fetchResult: nil, preload: false, drafts: [], mediaAccess: mediaAccess, cameraAccess: cameraAccess))
+                     } else if [.restricted, .denied].contains(mediaAccess) {
+@@ -762,6 +763,11 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
+                 }
+             }
+             
++            if controller.context.sharedContext.immediateExperimentalUISettings.ultra.hideGalleryCamera {
++                useLegacyCamera = false
++                useModernCamera = false
++            }
++
+             if useLegacyCamera {
+                 let enableAnimations = self.controller?.context.sharedContext.energyUsageSettings.fullTranslucency ?? true
+   
+@@ -2405,7 +2411,7 @@ public final class MediaPickerScreenImpl: ViewController, MediaPickerScreen, Att
+         }
+         self.interaction?.displayLivePhotoIcon = displayLivePhotoIcon
+         
+-        let highQualityPhoto = UserDefaults.standard.bool(forKey: "TG_photoHighQuality_v0")
++        let highQualityPhoto = context.sharedContext.immediateExperimentalUISettings.ultra.highQualityPhotos || UserDefaults.standard.bool(forKey: "TG_photoHighQuality_v0")
+         if highQualityPhoto {
+             self.interaction?.editingState.setHighQualityPhoto(highQualityPhoto)
+         }
+diff --git a/submodules/PasscodeCore/Sources/Passcode.swift b/submodules/PasscodeCore/Sources/Passcode.swift
+index d1ff0f65..0d131753 100644
+--- a/submodules/PasscodeCore/Sources/Passcode.swift
++++ b/submodules/PasscodeCore/Sources/Passcode.swift
+@@ -14,12 +14,14 @@ public struct PasscodeConfiguration: Equatable, Sendable {
+     public let processRole: ProcessRole
+     public let biometricKeychainService: String?
+     public let keychainScope: String?
++    public let usePrivateKeychain: Bool
+ 
+-    public init(appGroupIdentifier: String, processRole: ProcessRole, biometricKeychainService: String? = nil, keychainScope: String? = nil) {
++    public init(appGroupIdentifier: String, processRole: ProcessRole, biometricKeychainService: String? = nil, keychainScope: String? = nil, usePrivateKeychain: Bool = false) {
+         self.appGroupIdentifier = appGroupIdentifier
+         self.processRole = processRole
+         self.biometricKeychainService = biometricKeychainService
+         self.keychainScope = keychainScope
++        self.usePrivateKeychain = usePrivateKeychain
+     }
+ }
+ 
+@@ -52,6 +54,7 @@ public final class PasscodeEnvironment: @unchecked Sendable {
+             return
+         }
+         guard configuration.processRole != .mainApp || privateAccessGroup != nil else { throw PasscodeError.unavailable }
++        guard !configuration.usePrivateKeychain || configuration.processRole == .mainApp else { throw PasscodeError.unavailable }
+         self.configuration = configuration
+         self.resolvePrivateAccessGroup = privateAccessGroup
+     }
+@@ -71,8 +74,14 @@ public final class PasscodeEnvironment: @unchecked Sendable {
+ 
+     public func sharedAccessGroup() throws -> String {
+         self.mutex.lock()
+-        defer { self.mutex.unlock() }
+-        guard let configuration = self.configuration else { throw PasscodeError.unavailable }
++        guard let configuration = self.configuration else {
++            self.mutex.unlock()
++            throw PasscodeError.unavailable
++        }
++        self.mutex.unlock()
++        if configuration.usePrivateKeychain {
++            return try self.privateAccessGroup()
++        }
+         return configuration.appGroupIdentifier
+     }
+ 
+diff --git a/submodules/PasscodeCore/Tests/PasscodeCoreTests/PasscodeStandaloneTests.swift b/submodules/PasscodeCore/Tests/PasscodeCoreTests/PasscodeStandaloneTests.swift
+new file mode 100644
+index 00000000..d7594752
+--- /dev/null
++++ b/submodules/PasscodeCore/Tests/PasscodeCoreTests/PasscodeStandaloneTests.swift
+@@ -0,0 +1,33 @@
++import XCTest
++@testable import PasscodeCore
++
++final class PasscodeStandaloneTests: XCTestCase {
++    func testSharedModeRetainsOriginalAccessGroup() throws {
++        let environment = PasscodeEnvironment()
++        try environment.configure(PasscodeConfiguration(appGroupIdentifier: "group.app.telegaultra.client", processRole: .mainApp), privateAccessGroup: { "TEAM.app.telegaultra.client" })
++        XCTAssertEqual(try environment.sharedAccessGroup(), "group.app.telegaultra.client")
++    }
++
++    func testLocalModeUsesPrivateKeychainWithoutRecursiveLock() throws {
++        let environment = PasscodeEnvironment()
++        try environment.configure(PasscodeConfiguration(appGroupIdentifier: "group.app.telegaultra.client", processRole: .mainApp, usePrivateKeychain: true), privateAccessGroup: { "TEAM.app.telegaultra.client" })
++        XCTAssertEqual(try environment.sharedAccessGroup(), "TEAM.app.telegaultra.client")
++    }
++
++    func testExtensionsCannotOptIntoMainAppKeychain() {
++        let environment = PasscodeEnvironment()
++        XCTAssertThrowsError(try environment.configure(PasscodeConfiguration(appGroupIdentifier: "group.app.telegaultra.client", processRole: .appExtension, usePrivateKeychain: true)))
++    }
++
++    func testMissingPrivateGroupDoesNotDowngradeToSharedOrUnprotectedStorage() throws {
++        let environment = PasscodeEnvironment()
++        try environment.configure(PasscodeConfiguration(appGroupIdentifier: "group.app.telegaultra.client", processRole: .mainApp, usePrivateKeychain: true), privateAccessGroup: { nil })
++        XCTAssertThrowsError(try environment.sharedAccessGroup())
++    }
++
++    func testStorageModeCannotBeChangedAfterConfiguration() throws {
++        let environment = PasscodeEnvironment()
++        try environment.configure(PasscodeConfiguration(appGroupIdentifier: "group.app.telegaultra.client", processRole: .mainApp), privateAccessGroup: { "TEAM.app.telegaultra.client" })
++        XCTAssertThrowsError(try environment.configure(PasscodeConfiguration(appGroupIdentifier: "group.app.telegaultra.client", processRole: .mainApp, usePrivateKeychain: true), privateAccessGroup: { "TEAM.app.telegaultra.client" }))
++    }
++}
+diff --git a/submodules/SettingsUI/Sources/UltraSettingsController.swift b/submodules/SettingsUI/Sources/UltraSettingsController.swift
+new file mode 100644
+index 00000000..324d0ac3
+--- /dev/null
++++ b/submodules/SettingsUI/Sources/UltraSettingsController.swift
+@@ -0,0 +1,181 @@
++import Foundation
++import UIKit
++import Display
++import SwiftSignalKit
++import TelegramCore
++import TelegramPresentationData
++import TelegramUIPreferences
++import ItemListUI
++import AccountContext
++
++private enum UltraCategory: Int32, CaseIterable {
++    case messages
++    case camera
++    case ghost
++    case privacy
++    case additional
++
++    var title: String {
++        switch self {
++        case .messages: return "Сообщения"
++        case .camera: return "Камера"
++        case .ghost: return "Режим призрака"
++        case .privacy: return "Конфиденциальность"
++        case .additional: return "Дополнительно"
++        }
++    }
++}
++
++private enum UltraOption: Int32, CaseIterable {
++    case characterCount
++    case rearCamera
++    case highQualityPhotos
++    case skipReadHistory
++    case hideTyping
++    case hideRecording
++    case confirmCalls
++    case hideGalleryCamera
++    case disableCameraSwipe
++
++    var category: UltraCategory {
++        switch self {
++        case .characterCount: return .messages
++        case .rearCamera, .highQualityPhotos: return .camera
++        case .skipReadHistory, .hideTyping, .hideRecording: return .ghost
++        case .confirmCalls: return .privacy
++        case .hideGalleryCamera, .disableCameraSwipe: return .additional
++        }
++    }
++
++    var title: String {
++        switch self {
++        case .characterCount: return "Счётчик символов"
++        case .rearCamera: return "Начинать с задней камеры"
++        case .highQualityPhotos: return "Фото в HD по умолчанию"
++        case .skipReadHistory: return "Не отмечать сообщения прочитанными"
++        case .hideTyping: return "Не показывать набор текста"
++        case .hideRecording: return "Не показывать запись сообщений"
++        case .confirmCalls: return "Подтверждать исходящий звонок"
++        case .hideGalleryCamera: return "Скрыть камеру в галерее"
++        case .disableCameraSwipe: return "Не открывать камеру свайпом"
++        }
++    }
++
++    var keyPath: WritableKeyPath<ExperimentalUISettings, Bool> {
++        switch self {
++        case .characterCount: return \.ultra.showCharacterCount
++        case .rearCamera: return \.ultra.rearCamera
++        case .highQualityPhotos: return \.ultra.highQualityPhotos
++        case .skipReadHistory: return \.skipReadHistory
++        case .hideTyping: return \.ultra.hideTyping
++        case .hideRecording: return \.ultra.hideRecording
++        case .confirmCalls: return \.ultra.confirmCalls
++        case .hideGalleryCamera: return \.ultra.hideGalleryCamera
++        case .disableCameraSwipe: return \.ultra.disableCameraSwipe
++        }
++    }
++}
++
++private final class UltraSettingsArguments {
++    let open: (UltraCategory) -> Void
++    let update: (UltraOption, Bool) -> Void
++
++    init(open: @escaping (UltraCategory) -> Void, update: @escaping (UltraOption, Bool) -> Void) {
++        self.open = open
++        self.update = update
++    }
++}
++
++private enum UltraSettingsEntry: ItemListNodeEntry {
++    case category(UltraCategory)
++    case toggle(UltraOption, Bool)
++    case footer(String)
++
++    var section: ItemListSectionId {
++        return 0
++    }
++
++    var stableId: Int32 {
++        switch self {
++        case let .category(category): return category.rawValue
++        case let .toggle(option, _): return 100 + option.rawValue
++        case .footer: return 1000
++        }
++    }
++
++    static func < (lhs: UltraSettingsEntry, rhs: UltraSettingsEntry) -> Bool {
++        return lhs.stableId < rhs.stableId
++    }
++
++    func item(presentationData: ItemListPresentationData, arguments: Any) -> ListViewItem {
++        let arguments = arguments as! UltraSettingsArguments
++        switch self {
++        case let .category(category):
++            return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: category.title, label: "", sectionId: self.section, style: .blocks, action: {
++                arguments.open(category)
++            })
++        case let .toggle(option, value):
++            return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: option.title, value: value, sectionId: self.section, style: .blocks, updated: { value in
++                arguments.update(option, value)
++            })
++        case let .footer(text):
++            return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
++        }
++    }
++}
++
++public func ultraSettingsController(context: AccountContext) -> ViewController {
++    return ultraSettingsController(context: context, category: nil)
++}
++
++private func ultraSettingsController(context: AccountContext, category: UltraCategory?) -> ViewController {
++    var pushImpl: ((ViewController) -> Void)?
++    let arguments = UltraSettingsArguments(open: { category in
++        pushImpl?(ultraSettingsController(context: context, category: category))
++    }, update: { option, value in
++        let _ = updateExperimentalUISettingsInteractively(accountManager: context.sharedContext.accountManager, { settings in
++            var settings = settings
++            settings[keyPath: option.keyPath] = value
++            return settings
++        }).startStandalone()
++    })
++
++    let signal = combineLatest(
++        context.sharedContext.presentationData,
++        context.sharedContext.accountManager.sharedData(keys: Set([ApplicationSpecificSharedDataKeys.experimentalUISettings]))
++    )
++    |> deliverOnMainQueue
++    |> map { presentationData, sharedData -> (ItemListControllerState, (ItemListNodeState, Any)) in
++        let settings = sharedData.entries[ApplicationSpecificSharedDataKeys.experimentalUISettings]?.get(ExperimentalUISettings.self) ?? .defaultSettings
++        let presentationData = presentationData.withUpdated(theme: presentationData.theme.withModalBlocksBackground())
++        var entries: [UltraSettingsEntry] = []
++        if let category {
++            for option in UltraOption.allCases where option.category == category {
++                entries.append(.toggle(option, settings[keyPath: option.keyPath]))
++            }
++            switch category {
++            case .messages:
++                entries.append(.footer("Количество символов отображается в поле ввода. Лимиты отправки Telegram сохраняются."))
++            case .camera:
++                entries.append(.footer("Задняя камера — для историй и видеосообщений. HD применяется к фотографиям из галереи и увеличивает расход трафика. Камеру можно переключить вручную."))
++            case .ghost:
++                entries.append(.footer("Настройки действуют на этом устройстве. Другие ваши клиенты могут отправлять статусы и отметки прочтения. Открытие медиа и историй не гарантирует невидимость."))
++            case .privacy:
++                entries.append(.footer("Перед исходящим личным звонком появится подтверждение."))
++            case .additional:
++                entries.append(.footer("Изменения галереи применяются при следующем открытии вложений."))
++            }
++        } else {
++            entries = UltraCategory.allCases.map { .category($0) }
++            entries.append(.footer("ULTRA — неофициальный клиент Telegram. Настройки сохраняются на этом устройстве для всех добавленных аккаунтов."))
++        }
++        let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(category?.title ?? "ultra"), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back))
++        let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: entries, style: .blocks, animateChanges: true)
++        return (controllerState, (listState, arguments))
++    }
++    let controller = ItemListController(context: context, state: signal)
++    pushImpl = { [weak controller] next in
++        controller?.push(next)
++    }
++    return controller
++}
+diff --git a/submodules/TelegramUI/Components/CameraScreen/Sources/CameraScreen.swift b/submodules/TelegramUI/Components/CameraScreen/Sources/CameraScreen.swift
+index 6c93e100..1f68f64e 100644
+--- a/submodules/TelegramUI/Components/CameraScreen/Sources/CameraScreen.swift
++++ b/submodules/TelegramUI/Components/CameraScreen/Sources/CameraScreen.swift
+@@ -2576,6 +2576,9 @@ public class CameraScreenImpl: ViewController, CameraScreen {
+             if let cameraFrontPositionValue = UserDefaults.standard.object(forKey: "TelegramStoryCameraUseFrontPosition") as? NSNumber, cameraFrontPositionValue.boolValue {
+                 cameraFrontPosition = true
+             }
++            if case .story = controller.mode, self.context.sharedContext.immediateExperimentalUISettings.ultra.rearCamera {
++                cameraFrontPosition = false
++            }
+             
+             self.codeFrameView = CameraCodeFrameView(frame: .zero)
+             
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index ec2bc594..e7135462 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -1447,6 +1447,9 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         if hasSendAsButton {
+             actualTextInputViewInternalInsets.left += 31.0
+         }
++        if self.context?.sharedContext.immediateExperimentalUISettings.ultra.showCharacterCount == true {
++            actualTextInputViewInternalInsets.right += 48.0
++        }
+         
+         var textFieldHeight: CGFloat
+         var isOverflow = false
+@@ -3197,6 +3200,9 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         if hasSendAsButton {
+             actualTextInputViewInternalInsets.left += 31.0
+         }
++        if self.context?.sharedContext.immediateExperimentalUISettings.ultra.showCharacterCount == true {
++            actualTextInputViewInternalInsets.right += 48.0
++        }
+         
+         let textFieldFrame = CGRect(origin: CGPoint(x: actualTextInputViewInternalInsets.left, y: actualTextInputViewInternalInsets.top + textFieldTopContentOffset), size: CGSize(width: textInputFrame.size.width - (actualTextInputViewInternalInsets.left + actualTextInputViewInternalInsets.right), height: textInputHeight - actualTextInputViewInternalInsets.top - actualTextInputViewInternalInsets.bottom))
+         let textInputNodeClippingContainerFrame = CGRect(origin: CGPoint(x: textFieldFrame.minX - actualTextInputViewInternalInsets.left, y: textFieldFrame.minY - actualTextInputViewInternalInsets.top), size: CGSize(width: textFieldFrame.width + actualTextInputViewInternalInsets.left + actualTextInputViewInternalInsets.right,  height: textFieldFrame.height + actualTextInputViewInternalInsets.top + actualTextInputViewInternalInsets.bottom))
+@@ -4320,14 +4326,18 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+             let remainingCount = max(-999, inputTextMaxLength - textCount)
+             let counterText = remainingCount >= 5 ? "" : "\(remainingCount)"
+             self.counterTextNode.attributedText = NSAttributedString(string: counterText, font: counterFont, textColor: counterColor)
++        } else if let presentationInterfaceState = self.presentationInterfaceState, self.context?.sharedContext.immediateExperimentalUISettings.ultra.showCharacterCount == true {
++            let textCount = self.richTextInputNode?.text.count ?? 0
++            self.counterTextNode.attributedText = NSAttributedString(string: textCount == 0 ? "" : "\(textCount)", font: counterFont, textColor: presentationInterfaceState.theme.chat.inputPanel.panelControlColor)
+         } else {
+             self.counterTextNode.attributedText = NSAttributedString(string: "", font: counterFont, textColor: .black)
+         }
+             
+-        let counterSize = self.counterTextNode.updateLayout(CGSize(width: 40.0, height: 40.0))
++        let counterSize = self.counterTextNode.updateLayout(CGSize(width: 48.0, height: 40.0))
+         let counterFrame = CGRect(origin: CGPoint(x: backgroundSize.width - 11.0 - counterSize.width, y: 4.0), size: CGSize(width: counterSize.width, height: counterSize.height))
+         transition.updateFrame(node: self.counterTextNode, frame: counterFrame)
+-        transition.updateAlpha(node: self.counterTextNode, alpha: backgroundSize.height > 50.0 ? 1.0 : 0.0)
++        let showCharacterCount = self.context?.sharedContext.immediateExperimentalUISettings.ultra.showCharacterCount == true
++        transition.updateAlpha(node: self.counterTextNode, alpha: backgroundSize.height > 50.0 || showCharacterCount ? 1.0 : 0.0)
+     }
+     
+     private func installEmojiSuggestionPreviewGesture(hostView: UIView) {
+diff --git a/submodules/TelegramUI/Components/LegacyInstantVideoController/Sources/LegacyInstantVideoController.swift b/submodules/TelegramUI/Components/LegacyInstantVideoController/Sources/LegacyInstantVideoController.swift
+index 87ad204a..20c3b4a1 100644
+--- a/submodules/TelegramUI/Components/LegacyInstantVideoController/Sources/LegacyInstantVideoController.swift
++++ b/submodules/TelegramUI/Components/LegacyInstantVideoController/Sources/LegacyInstantVideoController.swift
+@@ -164,6 +164,9 @@ public func legacyInstantVideoController(theme: PresentationTheme, forStory: Boo
+                 node.slowmodeState = slowmodeState
+                 return node
+             }, canSendSilently: !isSecretChat, canSchedule: hasSchedule, reminder: peerId == context.account.peerId)!
++            if context.sharedContext.immediateExperimentalUISettings.ultra.rearCamera {
++                controller.useRearCameraInitially()
++            }
+             controller.presentScheduleController = { done in
+                 presentSchedulePicker { time, silentPosting in
+                     done?(time, silentPosting)
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+index 8c4a24b7..970482ef 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+@@ -161,6 +161,7 @@ enum PeerInfoContextSubject {
+ }
+ 
+ enum PeerInfoSettingsSection {
++    case ultra
+     case avatar
+     case edit
+     case proxy
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenSettingsActions.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenSettingsActions.swift
+index f1c1917b..480f2917 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenSettingsActions.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreenSettingsActions.swift
+@@ -51,6 +51,8 @@ extension PeerInfoScreenNode {
+             }
+         }
+         switch section {
++        case .ultra:
++            push(ultraSettingsController(context: self.context))
+         case .avatar:
+             self.controller?.openAvatarForEditing()
+         case .edit:
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+index a4873696..eec73003 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoSettingsItems.swift
+@@ -265,6 +265,9 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
+     items[.advanced]!.append(PeerInfoScreenDisclosureItem(id: 3, text: presentationData.strings.Settings_Appearance, icon: PresentationResourcesSettings.appearance, action: {
+         interaction.openSettings(.appearance)
+     }))
++    items[.advanced]!.append(PeerInfoScreenDisclosureItem(id: 7, text: "ultra", icon: PresentationResourcesSettings.appearance, action: {
++        interaction.openSettings(.ultra)
++    }))
+     
+     items[.advanced]!.append(PeerInfoScreenDisclosureItem(id: 6, label: .text(data.isPowerSavingEnabled == true ? presentationData.strings.Settings_PowerSavingOn : presentationData.strings.Settings_PowerSavingOff), text: presentationData.strings.Settings_PowerSaving, icon: PresentationResourcesSettings.powerSaving, action: {
+         interaction.openSettings(.powerSaving)
+diff --git a/submodules/TelegramUI/Components/VideoMessageCameraScreen/Sources/VideoMessageCameraScreen.swift b/submodules/TelegramUI/Components/VideoMessageCameraScreen/Sources/VideoMessageCameraScreen.swift
+index 5d7709ba..09d29fcf 100644
+--- a/submodules/TelegramUI/Components/VideoMessageCameraScreen/Sources/VideoMessageCameraScreen.swift
++++ b/submodules/TelegramUI/Components/VideoMessageCameraScreen/Sources/VideoMessageCameraScreen.swift
+@@ -995,7 +995,7 @@ public class VideoMessageCameraScreen: ViewController {
+             self.previewContainerView.addSubview(self.previewContainerContentView)
+                         
+             let isDualCameraEnabled = cameraImpl.isDualCameraSupported(forRoundVideo: true)
+-            let isFrontPosition = "".isEmpty
++            let isFrontPosition = !experimentalSettings.ultra.rearCamera
+             
+             self.mainPreviewView = cameraImpl.makeCameraSimplePreviewView(frame: .zero, main: true, roundVideo: true)
+             self.additionalPreviewView = cameraImpl.makeCameraSimplePreviewView(frame: .zero, main: false, roundVideo: true)
+diff --git a/submodules/TelegramUI/Sources/AccountContext.swift b/submodules/TelegramUI/Sources/AccountContext.swift
+index b264bc03..2d5e7f45 100644
+--- a/submodules/TelegramUI/Sources/AccountContext.swift
++++ b/submodules/TelegramUI/Sources/AccountContext.swift
+@@ -1012,6 +1012,23 @@ public final class AccountContextImpl: AccountContext {
+     }
+     
+     public func requestCall(peerId: EnginePeer.Id, isVideo: Bool, completion: @escaping () -> Void) {
++        if self.sharedContext.immediateExperimentalUISettings.ultra.confirmCalls {
++            guard let window = self.sharedContext.mainWindow else {
++                return
++            }
++            let presentationData = self.sharedContext.currentPresentationData.with { $0 }
++            window.present(textAlertController(context: self, title: "Начать звонок?", text: isVideo ? "Начать видеозвонок этому собеседнику?" : "Позвонить этому собеседнику?", actions: [
++                TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {}),
++                TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: { [weak self] in
++                    self?.requestCallConfirmed(peerId: peerId, isVideo: isVideo, completion: completion)
++                })
++            ]), on: .root)
++        } else {
++            self.requestCallConfirmed(peerId: peerId, isVideo: isVideo, completion: completion)
++        }
++    }
++
++    private func requestCallConfirmed(peerId: EnginePeer.Id, isVideo: Bool, completion: @escaping () -> Void) {
+         guard let callResult = self.sharedContext.callManager?.requestCall(context: self, peerId: peerId, isVideo: isVideo, endCurrentIfAny: false) else {
+             return
+         }
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index 1ceb46bc..65eca66d 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -310,6 +310,14 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+     private let firebaseRequestVerificationSecretStream = Promise<[String: String]>([:])
+     
+     private var urlSessions: [URLSession] = []
++    private var usesLocalAppStorage = false
++
++    private func showUltraStartupFailure(message: String, code: String, offerLocalStorage: Bool = false) {
++        let enableLocalStorage: (() -> Void)? = offerLocalStorage ? {
++            UserDefaults.standard.set(UltraAppStorageMode.local.rawValue, forKey: UltraAppStorage.modeKey)
++        } : nil
++        UltraStartupDiagnostics.shared.showFailure(message: message, code: code, enableLocalStorage: enableLocalStorage)
++    }
+     private func urlSession(identifier: String) -> URLSession {
+         if let existingSession = self.urlSessions.first(where: { $0.configuration.identifier == identifier }) {
+             return existingSession
+@@ -319,7 +327,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         let appGroupName = "group.\(baseAppBundleId)"
+ 
+         let configuration = URLSessionConfiguration.background(withIdentifier: identifier)
+-        configuration.sharedContainerIdentifier = appGroupName
++        if !self.usesLocalAppStorage {
++            configuration.sharedContainerIdentifier = appGroupName
++        }
+         configuration.isDiscretionary = false
+         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: .main)
+         self.urlSessions.append(session)
+@@ -351,9 +361,11 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+     private var recaptchaClientsBySiteKey: [String: Promise<RecaptchaClient>] = [:]
+         
+     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
++        UltraStartupDiagnostics.shared.begin()
+         precondition(!testIsLaunched)
+         testIsLaunched = true
+         CrashReportCollector.shared.start()
++        UltraStartupDiagnostics.shared.mark("CRASH_REPORTING_READY")
+         
+         let _ = voipTokenPromise.get().start(next: { token in
+             self.voipDeviceToken.set(.single(token))
+@@ -430,6 +442,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+             )
+         }
+         
++        UltraStartupDiagnostics.shared.mark("WINDOW_HOST_CREATING")
+         let (window, hostView) = nativeWindowHostView()
+         let statusBarHost = ApplicationStatusBarHost(scene: window.windowScene)
+         self.statusBarHost = statusBarHost
+@@ -451,12 +464,14 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         self.window = window
+         self.nativeWindow = window
+         
++        UltraStartupDiagnostics.shared.mark("METAL_INITIALIZING")
+         hostView.containerView.layer.addSublayer(MetalEngine.shared.rootLayer)
+         // On the first start after an update, compile the pipelines that would otherwise stall their first use.
+         if MetalEngine.shared.pipelineCache.isFresh {
+             prewarmLiquidGlassShapes([.crest], qos: .utility)
+         }
+         
++        UltraStartupDiagnostics.shared.mark("METAL_READY")
+         if !UIDevice.current.isBatteryMonitoringEnabled {
+             UIDevice.current.isBatteryMonitoringEnabled = true
+         }
+@@ -570,10 +585,53 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         
+         let baseAppBundleId = Bundle.main.bundleIdentifier!
+         let appGroupName = "group.\(baseAppBundleId)"
+-        try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .mainApp, biometricKeychainService: walletBiometricKeychainService), privateAccessGroup: {
+-            BuildConfig.keychainAccessGroup(baseAppBundleId: baseAppBundleId)
+-        })
+-        let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
++        UltraStartupDiagnostics.shared.mark("STORAGE_RESOLVING")
++        #if DEBUG && targetEnvironment(simulator)
++        // CI only, in a disposable simulator. Never changes an existing storage selection.
++        if CommandLine.arguments.contains("--ultra-ci-local-storage"), UserDefaults.standard.string(forKey: UltraAppStorage.modeKey) == nil {
++            UserDefaults.standard.set(UltraAppStorageMode.local.rawValue, forKey: UltraAppStorage.modeKey)
++        }
++        #endif
++        let sharedContainerURL: URL? = {
++            #if DEBUG && targetEnvironment(simulator)
++            if CommandLine.arguments.contains("--ultra-ci-no-app-group") {
++                return nil
++            }
++            #endif
++            return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
++        }()
++        let appStorage: UltraAppStorage
++        do {
++            appStorage = try UltraAppStorage.resolve(
++                sharedURL: sharedContainerURL,
++                localURL: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("ULTRA", isDirectory: true),
++                savedMode: UserDefaults.standard.string(forKey: UltraAppStorage.modeKey),
++                allowLocalStorage: Bundle.main.object(forInfoDictionaryKey: "ULTRAAllowLocalStorage") as? Bool == true
++            )
++            try FileManager.default.createDirectory(at: appStorage.url, withIntermediateDirectories: true)
++        } catch UltraAppStorageError.localStorageConsentRequired {
++            self.showUltraStartupFailure(message: "Подпись приложения не даёт доступ к общему контейнеру App Group. Для новой установки можно выбрать отдельное локальное хранилище ULTRA. Расширения, виджеты и общий доступ к данным будут недоступны. Данные из прежнего общего контейнера не будут перенесены. Если вы уже входили в аккаунт в этой установке, сначала восстановите прежнюю подпись.", code: "APP_GROUP_UNAVAILABLE", offerLocalStorage: true)
++            return true
++        } catch {
++            self.showUltraStartupFailure(message: "Не удалось открыть хранилище ULTRA. Проверьте доступ App Group в подписи и свободное место. Если приложение работало раньше, восстановите прежнюю подпись. Хранилище не переключено, данные не удалены.", code: "STORAGE_UNAVAILABLE")
++            return true
++        }
++        self.usesLocalAppStorage = appStorage.mode == .local
++        UltraStartupDiagnostics.shared.mark(self.usesLocalAppStorage ? "STORAGE_LOCAL" : "STORAGE_SHARED")
++        do {
++            try PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .mainApp, biometricKeychainService: walletBiometricKeychainService, usePrivateKeychain: self.usesLocalAppStorage), privateAccessGroup: {
++                BuildConfig.keychainAccessGroup(baseAppBundleId: baseAppBundleId)
++            })
++            if self.usesLocalAppStorage {
++                let _ = try PasscodeEnvironment.shared.privateAccessGroup()
++            }
++        } catch {
++            self.showUltraStartupFailure(message: "Не удалось настроить защищённое хранилище ключей. Разблокируйте iPhone и проверьте параметры подписи приложения. Защита кодом и шифрование не отключались.", code: "KEYCHAIN_UNAVAILABLE")
++            return true
++        }
++        UltraStartupDiagnostics.shared.mark("KEYCHAIN_READY")
++        UserDefaults.standard.set(appStorage.mode.rawValue, forKey: UltraAppStorage.modeKey)
++        let appGroupUrl = appStorage.url
+         
+         let buildConfig = BuildConfig(baseAppBundleId: baseAppBundleId)
+         self.buildConfig = buildConfig
+@@ -581,6 +639,10 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         
+         let apiId: Int32 = buildConfig.apiId
+         let apiHash: String = buildConfig.apiHash
++        if apiId == 1 && apiHash == String(repeating: "0", count: 32) {
++            self.showUltraStartupFailure(message: "Это диагностическая сборка ULTRA без настроенного подключения к Telegram. Для входа нужна новая сборка с собственными Telegram API ID и API Hash. Настройки подписи или переустановка эту причину не устранят.", code: "API_CREDENTIALS_MISSING")
++            return true
++        }
+         let languagesCategory = "ios"
+         
+         let autolockDeadine: Signal<Int32?, NoError>
+@@ -696,10 +758,6 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+             networkEngineFactory: RustNetworkEngineFactory()
+         )
+         
+-        guard let appGroupUrl = maybeAppGroupUrl else {
+-            self.mainWindow?.presentNative(UIAlertController(title: nil, message: "Error 2", preferredStyle: .alert))
+-            return true
+-        }
+         
+         var isDebugConfiguration = false
+         #if DEBUG
+@@ -726,13 +784,15 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         } else {
+             rootPath = rootPathForBasePath(appGroupUrl.path)
+         }
+-        if !isUITest {
++        if !isUITest && !self.usesLocalAppStorage {
+             performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
+         }
+         
++        UltraStartupDiagnostics.shared.mark("DATABASE_KEYS_INITIALIZING")
+         let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+         let encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+         
++        UltraStartupDiagnostics.shared.mark("DATABASE_KEYS_READY")
+         TempBox.initializeShared(basePath: rootPath, processType: "app", launchSpecificId: Int64.random(in: Int64.min ... Int64.max))
+         
+         let writeAbilityTestFile = TempBox.shared.tempFile(fileName: "test.bin")
+@@ -760,11 +820,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         }
+         
+         if !writeAbilityTestSuccess {
+-            let alertController = UIAlertController(title: nil, message: "The device does not have sufficient free space.", preferredStyle: .alert)
+-            alertController.addAction(UIAlertAction(title: "OK", style: .default, handler: { _ in
+-                preconditionFailure()
+-            }))
+-            self.mainWindow?.presentNative(alertController)
++            self.showUltraStartupFailure(message: "Не удалось записать данные в хранилище ULTRA. Освободите место на iPhone и откройте приложение снова.", code: "STORAGE_NOT_WRITABLE")
+             
+             return true
+         }
+@@ -1062,10 +1118,12 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+             }
+         })
+         
++        UltraStartupDiagnostics.shared.mark("ACCOUNT_MANAGER_INITIALIZING")
+         let accountManager: AccountManager<TelegramAccountManagerTypes> = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: false, isReadOnly: false, useCaches: true, removeDatabaseOnError: true, resetLocalSecrets: {
+             try resetWalletLocalSecrets()
+         })
+         self.accountManager = accountManager
++        UltraStartupDiagnostics.shared.mark("ACCOUNT_MANAGER_READY")
+ 
+         telegramUIDeclareEncodables()
+         initializeAccountManagement()
+@@ -1125,12 +1183,14 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+             }
+         }
+         
++        UltraStartupDiagnostics.shared.mark("PRESENTATION_LOADING")
+         let sharedContextSignal = currentPresentationDataAndSettings(accountManager: accountManager, systemUserInterfaceStyle: systemUserInterfaceStyle)
+         |> map { initialPresentationDataAndSettings -> (AccountManager, InitialPresentationDataAndSettings) in
+             return (accountManager, initialPresentationDataAndSettings)
+         }
+         |> deliverOnMainQueue
+         |> mapToSignal { [self] accountManager, initialPresentationDataAndSettings -> Signal<(SharedApplicationContext, LoggingSettings), NoError> in
++            UltraStartupDiagnostics.shared.mark("PRESENTATION_READY")
+             self.mainWindow?.hostView.containerView.backgroundColor =  initialPresentationDataAndSettings.presentationData.theme.chatList.backgroundColor
+             
+             let legacyBasePath = appGroupUrl.path
+@@ -1426,6 +1486,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+ 
+                     self.mainWindow.debugAction = nil
+                     self.mainWindow.viewController = context.rootController
++                    UltraStartupDiagnostics.shared.complete("ACCOUNT_UI_READY")
+                     
+                     if firstTime {
+                         let layer = context.rootController.view.layer
+@@ -1517,6 +1578,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+                 |> deliverOnMainQueue).start(next: { _ in
+                     progressDisposable.dispose()
+                     self.mainWindow.present(context.rootController, on: .root)
++                    UltraStartupDiagnostics.shared.complete("AUTH_UI_READY")
+                 }))
+             } else {
+                 authContextReadyDisposable.set(nil)
+@@ -1818,6 +1880,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+ 
+         self.mainWindow?.updateDeviceMetrics()
+         self.window?.makeKeyAndVisible()
++        if let window = self.window {
++            UltraStartupDiagnostics.shared.attach(scene: scene, mainWindow: window)
++        }
+ 
+         for context in connectionOptions.urlContexts {
+             let url = context.url
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index 5fe58bbf..9950c67b 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -6673,7 +6673,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             self.inputActivityDisposable = (self.typingActivityPromise.get()
+             |> deliverOnMainQueue).startStrict(next: { [weak self] value in
+                 if let strongSelf = self, strongSelf.presentationInterfaceState.interfaceState.editMessage == nil && strongSelf.presentationInterfaceState.subject != .scheduledMessages && strongSelf.presentationInterfaceState.currentSendAsPeerId == nil {
+-                    strongSelf.context.account.updateLocalInputActivity(peerId: activitySpace, activity: .typingText, isPresent: value)
++                    strongSelf.context.account.updateLocalInputActivity(peerId: activitySpace, activity: .typingText, isPresent: value && !strongSelf.context.sharedContext.immediateExperimentalUISettings.ultra.hideTyping)
+                 }
+             })
+         
+@@ -6690,7 +6690,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                     if value {
+                         strongSelf.context.account.updateLocalInputActivity(peerId: activitySpace, activity: .typingText, isPresent: false)
+                     }
+-                    strongSelf.context.account.updateLocalInputActivity(peerId: activitySpace, activity: .choosingSticker, isPresent: value)
++                    strongSelf.context.account.updateLocalInputActivity(peerId: activitySpace, activity: .choosingSticker, isPresent: value && !strongSelf.context.sharedContext.immediateExperimentalUISettings.ultra.hideTyping)
+                 }
+             })
+             
+@@ -6698,6 +6698,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             |> deliverOnMainQueue).startStrict(next: { [weak self] value in
+                 if let strongSelf = self, strongSelf.presentationInterfaceState.interfaceState.editMessage == nil && strongSelf.presentationInterfaceState.subject != .scheduledMessages && strongSelf.presentationInterfaceState.currentSendAsPeerId == nil {
+                     strongSelf.acquiredRecordingActivityDisposable?.dispose()
++                    strongSelf.acquiredRecordingActivityDisposable = nil
++                    if strongSelf.context.sharedContext.immediateExperimentalUISettings.ultra.hideRecording {
++                        return
++                    }
+                     switch value {
+                         case .voice:
+                             strongSelf.acquiredRecordingActivityDisposable = strongSelf.context.account.acquireLocalInputActivity(peerId: activitySpace, activity: .recordingVoice)
+diff --git a/submodules/TelegramUI/Sources/UltraAppStorage.swift b/submodules/TelegramUI/Sources/UltraAppStorage.swift
+new file mode 100644
+index 00000000..d1042b6b
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/UltraAppStorage.swift
+@@ -0,0 +1,48 @@
++import Foundation
++
++enum UltraAppStorageMode: String {
++    case shared
++    case local
++}
++
++enum UltraAppStorageError: Error {
++    case sharedContainerUnavailable
++    case localStorageConsentRequired
++    case localStorageUnavailable
++    case invalidSavedMode
++}
++
++struct UltraAppStorage {
++    static let modeKey = "ultra.appStorageMode.v1"
++
++    let mode: UltraAppStorageMode
++    let url: URL
++
++    // Never switch an existing installation to another database when signing changes.
++    static func resolve(sharedURL: URL?, localURL: URL?, savedMode: String?, allowLocalStorage: Bool) throws -> UltraAppStorage {
++        if let savedMode {
++            guard let mode = UltraAppStorageMode(rawValue: savedMode) else {
++                throw UltraAppStorageError.invalidSavedMode
++            }
++            switch mode {
++            case .shared:
++                guard let sharedURL else {
++                    throw UltraAppStorageError.sharedContainerUnavailable
++                }
++                return UltraAppStorage(mode: .shared, url: sharedURL)
++            case .local:
++                guard allowLocalStorage, let localURL else {
++                    throw UltraAppStorageError.localStorageUnavailable
++                }
++                return UltraAppStorage(mode: .local, url: localURL)
++            }
++        }
++        if let sharedURL {
++            return UltraAppStorage(mode: .shared, url: sharedURL)
++        }
++        if allowLocalStorage {
++            throw UltraAppStorageError.localStorageConsentRequired
++        }
++        throw UltraAppStorageError.sharedContainerUnavailable
++    }
++}
+diff --git a/submodules/TelegramUI/Sources/UltraStartupDiagnostics.swift b/submodules/TelegramUI/Sources/UltraStartupDiagnostics.swift
+new file mode 100644
+index 00000000..d7a2205b
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/UltraStartupDiagnostics.swift
+@@ -0,0 +1,160 @@
++import UIKit
++
++// Startup metadata only: no API credentials, account IDs, messages or database paths.
++final class UltraStartupDiagnostics {
++    static let shared = UltraStartupDiagnostics()
++
++    private let started = Date()
++    private var events: [String] = []
++    private var previousStage: String?
++    private var stage = "NOT_STARTED"
++    private var finished = false
++    private var failureController: UIViewController?
++    private weak var mainWindow: UIWindow?
++    private var diagnosticWindow: UIWindow?
++    private var progressController: UltraStartupProgressViewController?
++
++    private var reportURL: URL? {
++        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
++            .appendingPathComponent("ULTRA-Diagnostics", isDirectory: true)
++            .appendingPathComponent("startup.txt")
++    }
++
++    func begin() {
++        if let url = self.reportURL, let report = try? String(contentsOf: url, encoding: .utf8) {
++            self.previousStage = report.components(separatedBy: "\n").first(where: { $0.hasPrefix("stage=") })
++        }
++        self.mark("APP_DELEGATE_ENTERED")
++    }
++
++    func mark(_ stage: String) {
++        precondition(Thread.isMainThread)
++        guard !self.finished else { return }
++        self.stage = stage
++        self.events.append(String(format: "%.3fs %@", Date().timeIntervalSince(self.started), stage))
++        if self.events.count > 40 { self.events.removeFirst() }
++        if let url = self.reportURL {
++            do {
++                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
++                try self.report().write(to: url, atomically: true, encoding: .utf8)
++            } catch {
++                NSLog("ULTRA startup: report could not be saved")
++            }
++        }
++        NSLog("ULTRA startup: %@", stage)
++        self.progressController?.update(report: self.report())
++    }
++
++    func report() -> String {
++        let bundle = Bundle.main
++        return [
++            "ULTRA startup diagnostics v1",
++            "build=\(bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown")",
++            "bundle=\(bundle.bundleIdentifier ?? "unknown")",
++            "iOS=\(UIDevice.current.systemVersion)",
++            "stage=\(self.stage)",
++            "previous_\(self.previousStage ?? "stage=unavailable")",
++        ].joined(separator: "\n") + "\n" + self.events.joined(separator: "\n")
++    }
++
++    func showFailure(message: String, code: String, enableLocalStorage: (() -> Void)?) {
++        self.mark(code)
++        self.failureController = UltraStartupFailureViewController(
++            message: message, diagnosticCode: code, enableLocalStorage: enableLocalStorage,
++            diagnostics: self.report()
++        )
++        self.presentIfAttached()
++    }
++
++    func attach(scene: UIWindowScene, mainWindow: UIWindow) {
++        self.mainWindow = mainWindow
++        guard !self.finished else { return }
++        // Use the same scene as Telegram, but don't rely on its custom host controller.
++        let window = UIWindow(windowScene: scene)
++        window.windowLevel = UIWindow.Level(rawValue: UIWindow.Level.normal.rawValue + 1.0)
++        self.diagnosticWindow = window
++        self.presentIfAttached()
++    }
++
++    private func presentIfAttached() {
++        guard let window = self.diagnosticWindow else { return }
++        if let failureController = self.failureController {
++            window.rootViewController = failureController
++        } else {
++            let controller = UltraStartupProgressViewController(report: self.report())
++            self.progressController = controller
++            window.rootViewController = controller
++        }
++        window.makeKeyAndVisible()
++    }
++
++    func complete(_ stage: String) {
++        guard self.failureController == nil, !self.finished else { return }
++        self.mark(stage)
++        self.finished = true
++        self.diagnosticWindow?.isHidden = true
++        self.diagnosticWindow = nil
++        self.progressController = nil
++        self.mainWindow?.makeKeyAndVisible()
++    }
++}
++
++private final class UltraStartupProgressViewController: UIViewController {
++    private var report: String
++    private let reportLabel = UILabel()
++
++    init(report: String) {
++        self.report = report
++        super.init(nibName: nil, bundle: nil)
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    func update(report: String) {
++        self.report = report
++        self.reportLabel.text = report
++    }
++
++    override func viewDidLoad() {
++        super.viewDidLoad()
++        self.view.backgroundColor = .systemBackground
++        let title = UILabel()
++        title.text = "ULTRA: запуск"
++        title.font = .preferredFont(forTextStyle: .title1)
++        title.numberOfLines = 0
++        let explanation = UILabel()
++        explanation.text = "Если запуск не завершается, скопируйте диагностику. Отчёт содержит только этапы запуска, версию iOS и номер сборки."
++        explanation.numberOfLines = 0
++        self.reportLabel.text = self.report
++        self.reportLabel.font = .monospacedSystemFont(ofSize: 12.0, weight: .regular)
++        self.reportLabel.numberOfLines = 0
++        let copy = UIButton(type: .system)
++        copy.setTitle("Скопировать диагностику", for: .normal)
++        copy.addTarget(self, action: #selector(self.copyReport), for: .touchUpInside)
++        let stack = UIStackView(arrangedSubviews: [title, explanation, copy, self.reportLabel])
++        stack.axis = .vertical
++        stack.spacing = 16.0
++        stack.translatesAutoresizingMaskIntoConstraints = false
++        let scroll = UIScrollView()
++        scroll.translatesAutoresizingMaskIntoConstraints = false
++        self.view.addSubview(scroll)
++        scroll.addSubview(stack)
++        NSLayoutConstraint.activate([
++            scroll.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor),
++            scroll.bottomAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.bottomAnchor),
++            scroll.leadingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.leadingAnchor),
++            scroll.trailingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.trailingAnchor),
++            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 24.0),
++            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24.0),
++            stack.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 24.0),
++            stack.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -24.0),
++            stack.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -48.0),
++        ])
++    }
++
++    @objc private func copyReport() {
++        UIPasteboard.general.string = self.report
++    }
++}
+diff --git a/submodules/TelegramUI/Sources/UltraStartupFailureViewController.swift b/submodules/TelegramUI/Sources/UltraStartupFailureViewController.swift
+new file mode 100644
+index 00000000..d1919c39
+--- /dev/null
++++ b/submodules/TelegramUI/Sources/UltraStartupFailureViewController.swift
+@@ -0,0 +1,88 @@
++import UIKit
++
++final class UltraStartupFailureViewController: UIViewController {
++    private let message: String
++    private let diagnosticCode: String
++    private let enableLocalStorage: (() -> Void)?
++    private let diagnostics: String?
++    private let messageLabel = UILabel()
++    private let continueButton = UIButton(type: .system)
++
++    init(message: String, diagnosticCode: String, enableLocalStorage: (() -> Void)? = nil, diagnostics: String? = nil) {
++        self.message = message
++        self.diagnosticCode = diagnosticCode
++        self.enableLocalStorage = enableLocalStorage
++        self.diagnostics = diagnostics
++        super.init(nibName: nil, bundle: nil)
++    }
++
++    required init?(coder: NSCoder) {
++        fatalError("init(coder:) has not been implemented")
++    }
++
++    override func viewDidLoad() {
++        super.viewDidLoad()
++        self.view.backgroundColor = .systemBackground
++        let titleLabel = UILabel()
++        titleLabel.text = "ULTRA: запуск приостановлен"
++        titleLabel.font = .preferredFont(forTextStyle: .title2)
++        titleLabel.adjustsFontForContentSizeCategory = true
++        titleLabel.numberOfLines = 0
++        titleLabel.accessibilityTraits = .header
++
++        self.messageLabel.text = self.message
++        self.messageLabel.font = .preferredFont(forTextStyle: .body)
++        self.messageLabel.adjustsFontForContentSizeCategory = true
++        self.messageLabel.numberOfLines = 0
++
++        let diagnosticLabel = UILabel()
++        let bundleId = Bundle.main.bundleIdentifier ?? "unknown"
++        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
++        diagnosticLabel.text = "Код: \(self.diagnosticCode)\n\(bundleId) · сборка \(build)"
++        diagnosticLabel.font = .preferredFont(forTextStyle: .caption1)
++        diagnosticLabel.adjustsFontForContentSizeCategory = true
++        diagnosticLabel.textColor = .secondaryLabel
++        diagnosticLabel.numberOfLines = 0
++
++        self.continueButton.setTitle("Использовать локальное хранилище", for: .normal)
++        self.continueButton.titleLabel?.numberOfLines = 0
++        self.continueButton.addTarget(self, action: #selector(self.chooseLocalStorage), for: .touchUpInside)
++        self.continueButton.isHidden = self.enableLocalStorage == nil
++
++        let stack = UIStackView(arrangedSubviews: [titleLabel, self.messageLabel, self.continueButton, diagnosticLabel])
++        if self.diagnostics != nil {
++            let copy = UIButton(type: .system)
++            copy.setTitle("Скопировать диагностику", for: .normal)
++            copy.addTarget(self, action: #selector(self.copyDiagnostics), for: .touchUpInside)
++            stack.addArrangedSubview(copy)
++        }
++        stack.axis = .vertical
++        stack.spacing = 20.0
++        stack.translatesAutoresizingMaskIntoConstraints = false
++        let scrollView = UIScrollView()
++        scrollView.translatesAutoresizingMaskIntoConstraints = false
++        self.view.addSubview(scrollView)
++        scrollView.addSubview(stack)
++        NSLayoutConstraint.activate([
++            scrollView.leadingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.leadingAnchor),
++            scrollView.trailingAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.trailingAnchor),
++            scrollView.topAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.topAnchor),
++            scrollView.bottomAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.bottomAnchor),
++            stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: 24.0),
++            stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -24.0),
++            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: 32.0),
++            stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -32.0),
++            stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -48.0)
++        ])
++    }
++
++    @objc private func chooseLocalStorage() {
++        self.enableLocalStorage?()
++        self.continueButton.isHidden = true
++        self.messageLabel.text = "Локальное хранилище выбрано. Полностью закройте ULTRA через переключатель приложений и откройте снова. Существующие данные не удалены и не перенесены."
++    }
++
++    @objc private func copyDiagnostics() {
++        UIPasteboard.general.string = self.diagnostics
++    }
++}
+diff --git a/submodules/TelegramUIPreferences/Sources/ExperimentalUISettings.swift b/submodules/TelegramUIPreferences/Sources/ExperimentalUISettings.swift
+index c15a2bf2..167961b9 100644
+--- a/submodules/TelegramUIPreferences/Sources/ExperimentalUISettings.swift
++++ b/submodules/TelegramUIPreferences/Sources/ExperimentalUISettings.swift
+@@ -3,6 +3,7 @@ import TelegramCore
+ import SwiftSignalKit
+ 
+ public struct ExperimentalUISettings: Codable, Equatable {
++    public var ultra = UltraSettings()
+     public enum VideoMessageCameraMode: String, CaseIterable {
+         case legacy
+         case vga
+@@ -276,6 +277,7 @@ public struct ExperimentalUISettings: Codable, Equatable {
+     
+     public init(from decoder: Decoder) throws {
+         let container = try decoder.container(keyedBy: StringCodingKey.self)
++        self.ultra = try container.decodeIfPresent(UltraSettings.self, forKey: "ultra") ?? UltraSettings()
+ 
+         self.keepChatNavigationStack = (try container.decodeIfPresent(Int32.self, forKey: "keepChatNavigationStack") ?? 0) != 0
+         self.skipReadHistory = (try container.decodeIfPresent(Int32.self, forKey: "skipReadHistory") ?? 0) != 0
+@@ -340,6 +342,7 @@ public struct ExperimentalUISettings: Codable, Equatable {
+     
+     public func encode(to encoder: Encoder) throws {
+         var container = encoder.container(keyedBy: StringCodingKey.self)
++        try container.encode(self.ultra, forKey: "ultra")
+ 
+         try container.encode((self.keepChatNavigationStack ? 1 : 0) as Int32, forKey: "keepChatNavigationStack")
+         try container.encode((self.skipReadHistory ? 1 : 0) as Int32, forKey: "skipReadHistory")
+diff --git a/submodules/TelegramUIPreferences/Sources/UltraSettings.swift b/submodules/TelegramUIPreferences/Sources/UltraSettings.swift
+new file mode 100644
+index 00000000..76bcf686
+--- /dev/null
++++ b/submodules/TelegramUIPreferences/Sources/UltraSettings.swift
+@@ -0,0 +1,40 @@
++import Foundation
++import TelegramCore
++
++public struct UltraSettings: Codable, Equatable {
++    public var showCharacterCount: Bool = false
++    public var hideTyping: Bool = false
++    public var hideRecording: Bool = false
++    public var rearCamera: Bool = false
++    public var hideGalleryCamera: Bool = false
++    public var highQualityPhotos: Bool = false
++    public var confirmCalls: Bool = false
++    public var disableCameraSwipe: Bool = false
++
++    public init() {
++    }
++
++    public init(from decoder: Decoder) throws {
++        let container = try decoder.container(keyedBy: StringCodingKey.self)
++        self.showCharacterCount = try container.decodeIfPresent(Bool.self, forKey: "showCharacterCount") ?? false
++        self.hideTyping = try container.decodeIfPresent(Bool.self, forKey: "hideTyping") ?? false
++        self.hideRecording = try container.decodeIfPresent(Bool.self, forKey: "hideRecording") ?? false
++        self.rearCamera = try container.decodeIfPresent(Bool.self, forKey: "rearCamera") ?? false
++        self.hideGalleryCamera = try container.decodeIfPresent(Bool.self, forKey: "hideGalleryCamera") ?? false
++        self.highQualityPhotos = try container.decodeIfPresent(Bool.self, forKey: "highQualityPhotos") ?? false
++        self.confirmCalls = try container.decodeIfPresent(Bool.self, forKey: "confirmCalls") ?? false
++        self.disableCameraSwipe = try container.decodeIfPresent(Bool.self, forKey: "disableCameraSwipe") ?? false
++    }
++
++    public func encode(to encoder: Encoder) throws {
++        var container = encoder.container(keyedBy: StringCodingKey.self)
++        try container.encode(self.showCharacterCount, forKey: "showCharacterCount")
++        try container.encode(self.hideTyping, forKey: "hideTyping")
++        try container.encode(self.hideRecording, forKey: "hideRecording")
++        try container.encode(self.rearCamera, forKey: "rearCamera")
++        try container.encode(self.hideGalleryCamera, forKey: "hideGalleryCamera")
++        try container.encode(self.highQualityPhotos, forKey: "highQualityPhotos")
++        try container.encode(self.confirmCalls, forKey: "confirmCalls")
++        try container.encode(self.disableCameraSwipe, forKey: "disableCameraSwipe")
++    }
++}
