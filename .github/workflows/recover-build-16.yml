@@ -1,0 +1,164 @@
+name: Recover ULTRA build 16
+'on':
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ultra-ios
+  cancel-in-progress: false
+env:
+  ULTRA_BUILD_NUMBER: '16'
+jobs:
+  device-build:
+    runs-on: xcode-27
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Checkout ULTRA build files
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: 'false'
+    - name: Prepare private logs
+      run: 'mkdir -p private-logs
+
+        [[ "$ULTRA_BUILD_NUMBER" =~ ^[1-9][0-9]{0,3}$ ]]'
+    - name: Checkout pinned official source
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: TelegramMessenger/Telegram-iOS
+        ref: 279f89e4d4f63f17227bf877dc3d8990f22ecd58
+        path: source
+        submodules: recursive
+        persist-credentials: 'false'
+    - name: Set Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: '3.13'
+    - name: Install checksum-pinned age
+      run: python3 scripts/install_age.py
+    - name: Require the exact previously tested build 16 source
+      run: 'python3 - <<''PY''
+
+        import hashlib, json
+
+        from pathlib import Path
+
+        expected = ''a7e86f4aaeb83bcb02cc23f82a8f1f6c4d31e0728e16b5bfd24e3172ca5a958c''
+
+        lock = json.loads(Path(''source.lock.json'').read_text())
+
+        assert lock[''patch_sha256''] == expected
+
+        assert hashlib.sha256(Path(''patches/ultra.patch'').read_bytes()).hexdigest()
+        == expected
+
+        assert lock[''commit''] == ''279f89e4d4f63f17227bf877dc3d8990f22ecd58''
+
+        PY'
+    - name: Check toolchain and capacity
+      run: 'set -euo pipefail
+
+        XCODE_VERSION=$(python3 -c ''import json; print(json.load(open("source/versions.json"))["xcode"])'')
+
+        sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer"
+
+        xcodebuild -version
+
+        python3 --version
+
+        df -h .
+
+        sysctl hw.memsize hw.ncpu
+
+        '
+    - name: Apply ULTRA and configure unsigned build
+      env:
+        TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+        TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+      run: '{
+
+        python3 scripts/prepare_source.py --source source
+
+        } > "$GITHUB_WORKSPACE/private-logs/apply-ultra-and-configure-unsigned-build.log"
+        2>&1
+
+        '
+    - name: Download encrypted complete-client evidence
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ULTRA-startup-42395019220
+        path: sealed-input
+        run-id: '42395019220'
+        github-token: ${{ github.token }}
+    - name: Restore encrypted artifact inside runner
+      env:
+        ULTRA_ARTIFACT_IDENTITY: ${{ secrets.ULTRA_ARTIFACT_IDENTITY }}
+      run: python3 scripts/sealed_artifacts.py open --input sealed-input/startup.zip.age
+        --output restored --identity-env ULTRA_ARTIFACT_IDENTITY > private-logs/restore.log
+        2>&1
+    - name: Preserve verified evidence files
+      run: "python3 - <<'PY'\nimport shutil\nfrom pathlib import Path\n\noutput =\
+        \ Path(\"artifacts\")\noutput.mkdir(exist_ok=True)\nfor path in Path(\"restored/artifacts\"\
+        ).iterdir():\n    if path.is_file():\n        shutil.copy2(path, output /\
+        \ path.name)\nPY\n"
+    - name: Compile iPhone IPA
+      working-directory: source
+      run: "{\nset -euo pipefail\npython3 -u build-system/Make/Make.py build \\\n\
+        \  --configurationPath=build-input/ultra-configuration.json \\\n  --unsigned\
+        \ \\\n  --buildNumber=\"$ULTRA_BUILD_NUMBER\" \\\n  --configuration=release_arm64\
+        \ \\\n  --outputBuildArtifactsPath=\"$GITHUB_WORKSPACE/artifacts\"\nmv \"\
+        $GITHUB_WORKSPACE/artifacts/Telegram.ipa\" \"$GITHUB_WORKSPACE/artifacts/ULTRA-unsigned.ipa\"\
+        \n} > \"$GITHUB_WORKSPACE/private-logs/compile-iphone-ipa.log\" 2>&1\n"
+    - name: Inspect packaged main application
+      run: "{\npython3 scripts/verify_ipa.py artifacts/ULTRA-unsigned.ipa \\\n  --build-number=\"\
+        $ULTRA_BUILD_NUMBER\" --report=artifacts/ipa-verification.json\n} > \"$GITHUB_WORKSPACE/private-logs/inspect-packaged-main-application.log\"\
+        \ 2>&1\n"
+    - name: Encrypt artifacts and private logs
+      if: always()
+      run: python3 scripts/sealed_artifacts.py seal --include artifacts --include
+        private-logs --recipient ci/artifact-recipient.txt --output sealed/release.zip.age
+    - name: Upload encrypted artifact (attempt 1/3)
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: ULTRA-iOS-16-recovery-encrypted
+        path: sealed/release.zip.age
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
+      id: sealed_upload_1
+      continue-on-error: true
+    - name: Wait before retrying encrypted upload
+      if: always() && steps.sealed_upload_1.outcome == 'failure'
+      run: sleep 20
+    - name: Upload encrypted artifact (attempt 2/3)
+      if: always() && steps.sealed_upload_1.outcome == 'failure'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: ULTRA-iOS-16-recovery-encrypted
+        path: sealed/release.zip.age
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
+      id: sealed_upload_2
+      continue-on-error: true
+    - name: Wait before retrying encrypted upload
+      if: always() && steps.sealed_upload_2.outcome == 'failure'
+      run: sleep 20
+    - name: Upload encrypted artifact (attempt 3/3)
+      if: always() && steps.sealed_upload_2.outcome == 'failure'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: ULTRA-iOS-16-recovery-encrypted
+        path: sealed/release.zip.age
+        compression-level: 0
+        if-no-files-found: error
+        retention-days: 1
+        overwrite: true
+      id: sealed_upload_3
+    if: ${{ github.actor == github.repository_owner }}

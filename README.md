@@ -19,6 +19,8 @@ The workflow runs the build-helper tests, storage/Keychain tests, diagnostic-jou
 
 Build outputs, screenshots and detailed logs are uploaded only as age-encrypted ZIP bundles. Public Actions pages show step names, status and generic tool setup output. Commands that may handle API-bearing generated source write their output to encrypted private logs.
 
+Encrypted uploads have up to three attempts, separated by 20-second pauses. The last failed attempt fails the job. The manual **Recover ULTRA build 16** workflow recompiles only the iPhone version using the exact patch already tested in run `42395019220`; it requires the unexpired encrypted startup artifact from that run and refuses a different patch. This recovery does not rerun simulator validation. A failed upload after a finished hosted job does not leave a downloadable copy of that job's local files.
+
 Download the artifact, extract its `.age` file and use `scripts/sealed_artifacts.py open` with the matching private identity and a new local output directory. `python scripts/sealed_artifacts.py open --help` lists the arguments. age v1.3.2 is required; its upstream macOS package is checksum-pinned by `scripts/install_age.py`. Artifacts expire after one day.
 
 The decrypted `artifacts/ULTRA-unsigned.ipa` must be signed before installation. Its identity is `app.telegaultra.client`, displayed as ULTRA. A new installation without App Groups can explicitly choose local storage, fully close the application and reopen it. Widgets and extensions cannot share the local database; push notifications need separate compatible provisioning and APNs configuration. Existing shared storage is never silently replaced with a new local database by this patch.
