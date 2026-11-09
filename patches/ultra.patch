@@ -7645,7 +7645,7 @@ index 00000000..54d1ae1f
 +}
 diff --git a/submodules/TelegramCore/Sources/PendingMessages/UltraVideoSanitizer.swift b/submodules/TelegramCore/Sources/PendingMessages/UltraVideoSanitizer.swift
 new file mode 100644
-index 00000000..11bb3f9b
+index 00000000..299696aa
 --- /dev/null
 +++ b/submodules/TelegramCore/Sources/PendingMessages/UltraVideoSanitizer.swift
 @@ -0,0 +1,79 @@
@@ -7681,7 +7681,7 @@ index 00000000..11bb3f9b
 +        let fullRange = CMTimeRange(start: .zero, duration: duration)
 +        for original in video + audio {
 +            guard let target = composition.addMutableTrack(withMediaType: original.mediaType, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw UltraVideoPreparationError.unsupported }
-+            let range = CMTimeRangeGetIntersection(try await original.load(.timeRange), fullRange)
++            let range = CMTimeRangeGetIntersection(try await original.load(.timeRange), otherRange: fullRange)
 +            guard range.duration.seconds.isFinite, range.duration.seconds > 0 else { throw UltraVideoPreparationError.unsupported }
 +            try target.insertTimeRange(range, of: original, at: range.start)
 +            if original.mediaType == .video {
