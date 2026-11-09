@@ -215,10 +215,11 @@ index 00000000..c7e21eda
 +}
 diff --git a/Tests/UltraFolderTabsTests/UltraFolderTabsLayoutTests.swift b/Tests/UltraFolderTabsTests/UltraFolderTabsLayoutTests.swift
 new file mode 100644
-index 00000000..77126dfd
+index 00000000..d024156c
 --- /dev/null
 +++ b/Tests/UltraFolderTabsTests/UltraFolderTabsLayoutTests.swift
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,26 @@
++import CoreGraphics
 +import Foundation
 +import XCTest
 +@testable import UltraFolderLayout
@@ -3084,10 +3085,11 @@ index bc6825e3..5074df60 100644
          transition.updateFrame(node: self.mainContainerNode, frame: CGRect(origin: CGPoint(), size: layout.size))
 diff --git a/submodules/ChatListUI/Sources/UltraFolderTabsLayout.swift b/submodules/ChatListUI/Sources/UltraFolderTabsLayout.swift
 new file mode 100644
-index 00000000..0b2027ad
+index 00000000..b887b802
 --- /dev/null
 +++ b/submodules/ChatListUI/Sources/UltraFolderTabsLayout.swift
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,18 @@
++import CoreGraphics
 +import Foundation
 +
 +struct UltraFolderTabsLayout {
