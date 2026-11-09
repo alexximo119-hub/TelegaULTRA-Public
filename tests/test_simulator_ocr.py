@@ -27,6 +27,8 @@ class SimulatorOCRTests(unittest.TestCase):
                 for call in ocr.call_args_list:
                     self.assertEqual(call.kwargs["env"]["OMP_THREAD_LIMIT"], "1")
                     self.assertEqual(call.kwargs["timeout"], 60)
+                    self.assertEqual(call.args[0][-4:],
+                                     ["--psm", "6", "-c", "thresholding_method=2"])
                 return result, ocr.call_count
 
     def test_success_keeps_recognized_text(self):
