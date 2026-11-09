@@ -4205,7 +4205,7 @@ index f5410229..783d428a 100644
          "//submodules/DeviceAccess:DeviceAccess",
 diff --git a/submodules/SaveToCameraRoll/Sources/UltraViewOnceMediaSaver.swift b/submodules/SaveToCameraRoll/Sources/UltraViewOnceMediaSaver.swift
 new file mode 100644
-index 00000000..92a9f54e
+index 00000000..149935a5
 --- /dev/null
 +++ b/submodules/SaveToCameraRoll/Sources/UltraViewOnceMediaSaver.swift
 @@ -0,0 +1,106 @@
@@ -4222,7 +4222,7 @@ index 00000000..92a9f54e
 +        guard context.sharedContext.immediateExperimentalUISettings.ultra.saveViewOnceMedia else { return EmptyDisposable }
 +        let message = message._asMessage()
 +        let isViewOnce = message.autoclearAttribute?.timeout == viewOnceTimeout || message.autoremoveAttribute?.timeout == viewOnceTimeout
-+        guard UltraViewOnceSavePolicy.isEligible(isViewOnce: isViewOnce, isSecretChat: message.id.peerId.namespace == Namespaces.Peer.SecretChat, hasPaidMedia: message.media.contains(where: { $0 is TelegramMediaPaidContent || $0 is TelegramMediaInvoice }), isSensitive: message.isSensitiveContent(platform: "ios")) else { return EmptyDisposable }
++        guard UltraViewOnceSavePolicy.isEligible(isViewOnce: isViewOnce, isSecretChat: message.id.peerId.namespace == Namespaces.Peer.SecretChat, hasPaidMedia: message.media.contains(where: { $0 is TelegramMediaPaidContent || $0 is TelegramMediaInvoice }), isSensitive: message.isSensitiveContent(platform: "ios", contentSettings: context.currentContentSettings.with { $0 })) else { return EmptyDisposable }
 +        var selected: (EngineMediaResource, Bool, String)?
 +        for media in message.media {
 +            if let image = media as? TelegramMediaImage, let representation = largestImageRepresentation(image.representations) {
@@ -10629,7 +10629,7 @@ index bf71cb20..f225095b 100644
      
      var authorTitle = messageTimestampStatusAuthorTitle(context: context, message: message, strings: strings, nameDisplayOrder: nameDisplayOrder)
 diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveMediaNode/Sources/ChatMessageInteractiveMediaNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveMediaNode/Sources/ChatMessageInteractiveMediaNode.swift
-index 48c8b520..e01e2247 100644
+index 48c8b520..0d259a9d 100644
 --- a/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveMediaNode/Sources/ChatMessageInteractiveMediaNode.swift
 +++ b/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveMediaNode/Sources/ChatMessageInteractiveMediaNode.swift
 @@ -958,7 +958,8 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
@@ -10637,7 +10637,7 @@ index 48c8b520..e01e2247 100644
              }
              
 -            let hasSpoiler = message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute })
-+            let revealMediaSpoiler = UltraInteractionPolicy.shouldRevealMediaSpoiler(enabled: context.sharedContext.immediateExperimentalUISettings.ultra.revealMediaSpoilers, isSecretMedia: isSecretMedia, hasPaidMedia: message.media.contains(where: { $0 is TelegramMediaInvoice || $0 is TelegramMediaPaidContent }), isSensitive: message.isSensitiveContent(platform: "ios"))
++            let revealMediaSpoiler = UltraInteractionPolicy.shouldRevealMediaSpoiler(enabled: context.sharedContext.immediateExperimentalUISettings.ultra.revealMediaSpoilers, isSecretMedia: isSecretMedia, hasPaidMedia: message.media.contains(where: { $0 is TelegramMediaInvoice || $0 is TelegramMediaPaidContent }), isSensitive: message.isSensitiveContent(platform: "ios", contentSettings: context.currentContentSettings.with { $0 }))
 +            let hasSpoiler = message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute }) && !revealMediaSpoiler
              var isExtendedMediaPreview = false
              var isInlinePlayableVideo = false
@@ -10656,7 +10656,7 @@ index 48c8b520..e01e2247 100644
              }
              displaySpoiler = true
 -        } else if message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute }) {
-+        } else if message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute }), !UltraInteractionPolicy.shouldRevealMediaSpoiler(enabled: self.context?.sharedContext.immediateExperimentalUISettings.ultra.revealMediaSpoilers == true, isSecretMedia: isSecretMedia, hasPaidMedia: message.media.contains(where: { $0 is TelegramMediaInvoice || $0 is TelegramMediaPaidContent }), isSensitive: message.isSensitiveContent(platform: "ios")) {
++        } else if message.attributes.contains(where: { $0 is MediaSpoilerMessageAttribute }), !UltraInteractionPolicy.shouldRevealMediaSpoiler(enabled: self.context?.sharedContext.immediateExperimentalUISettings.ultra.revealMediaSpoilers == true, isSecretMedia: isSecretMedia, hasPaidMedia: message.media.contains(where: { $0 is TelegramMediaInvoice || $0 is TelegramMediaPaidContent }), isSensitive: self.context.map { message.isSensitiveContent(platform: "ios", contentSettings: $0.currentContentSettings.with { $0 }) } ?? true) {
              displaySpoiler = true
          } else if isSecretMedia {
              displaySpoiler = true
@@ -10765,13 +10765,12 @@ index 8652b352..c5832ebd 100644
                                  if let intersection = selectionRange.intersection(spoilerRange), intersection.length > 0 {
 diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageTextBubbleContentNode/Sources/ChatMessageUltraHistoryBubbleContentNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageTextBubbleContentNode/Sources/ChatMessageUltraHistoryBubbleContentNode.swift
 new file mode 100644
-index 00000000..7a534e02
+index 00000000..8db38ad8
 --- /dev/null
 +++ b/submodules/TelegramUI/Components/Chat/ChatMessageTextBubbleContentNode/Sources/ChatMessageUltraHistoryBubbleContentNode.swift
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,77 @@
 +import Foundation
 +import UIKit
-+import LottieSettings
 +import AsyncDisplayKit
 +import Display
 +import TelegramCore
@@ -10784,8 +10783,8 @@ index 00000000..7a534e02
 +    private let bodyNode = TextNode()
 +    private let lineNode = ASDisplayNode()
 +
-+    required public init(lottieSettings: LottieRenderingSettings) {
-+        super.init(lottieSettings: lottieSettings)
++    required public init() {
++        super.init()
 +        self.addSubnode(self.lineNode)
 +        self.addSubnode(self.titleNode)
 +        self.addSubnode(self.bodyNode)

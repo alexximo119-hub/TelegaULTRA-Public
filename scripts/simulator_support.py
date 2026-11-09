@@ -1,6 +1,7 @@
 """Helpers for disposable, explicitly created CI simulators."""
 
 import json
+import os
 import signal
 import subprocess
 import time
@@ -124,11 +125,19 @@ def screenshot_text(udid: str, path: Path) -> str:
     subprocess.run(
         ["xcrun", "simctl", "io", udid, "screenshot", str(path)], check=True
     )
-    text = subprocess.check_output(
-        ["tesseract", str(path), "stdout", "-l", "eng"],
-        text=True,
-        timeout=60,
-    ).strip()
+    environment = dict(os.environ, OMP_THREAD_LIMIT="1")
+    for attempt in range(2):
+        try:
+            text = subprocess.check_output(
+                ["tesseract", str(path), "stdout", "-l", "eng"],
+                text=True,
+                timeout=60,
+                env=environment,
+            ).strip()
+            break
+        except subprocess.TimeoutExpired:
+            if attempt == 1:
+                raise
     path.with_suffix(".txt").write_text(text, encoding="utf-8")
     return text
 
