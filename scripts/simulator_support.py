@@ -129,7 +129,12 @@ def screenshot_text(udid: str, path: Path) -> str:
     for attempt in range(2):
         try:
             text = subprocess.check_output(
-                ["tesseract", str(path), "stdout", "-l", "eng"],
+                # Sauvola preserves the faint diagnostic code; a single text
+                # block also reads the light-on-dark consent screen reliably.
+                [
+                    "tesseract", str(path), "stdout", "-l", "eng",
+                    "--psm", "6", "-c", "thresholding_method=2",
+                ],
                 text=True,
                 timeout=60,
                 env=environment,
