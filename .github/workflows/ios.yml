@@ -320,6 +320,12 @@ jobs:
         } > "$GITHUB_WORKSPACE/private-logs/apply-ultra-and-configure-unsigned-build.log" 2>&1
 
         '
+    - name: Verify standalone invariants before device compilation
+      run: 'set -euo pipefail
+
+        python3 scripts/test_startup.py > "$GITHUB_WORKSPACE/private-logs/device-standalone-invariants.log" 2>&1
+
+        '
     - name: Compile iPhone IPA
       working-directory: source
       run: "set -euo pipefail\npython3 ../scripts/run_private_step.py \\\n  --label device \\\n  --log \"$GITHUB_WORKSPACE/private-logs/compile-iphone-ipa.log\" \\\n  -- python3 -u build-system/Make/Make.py build \\\n  --continueOnError \\\n  --configurationPath=build-input/ultra-configuration.json \\\n  --unsigned \\\n  --buildNumber=\"$ULTRA_BUILD_NUMBER\" \\\n  --configuration=release_arm64 \\\n  --outputBuildArtifactsPath=\"$GITHUB_WORKSPACE/artifacts\"\nmv \"$GITHUB_WORKSPACE/artifacts/Telegram.ipa\" \"$GITHUB_WORKSPACE/artifacts/ULTRA-unsigned.ipa\"\n"
