@@ -7645,10 +7645,10 @@ index 00000000..54d1ae1f
 +}
 diff --git a/submodules/TelegramCore/Sources/PendingMessages/UltraVideoSanitizer.swift b/submodules/TelegramCore/Sources/PendingMessages/UltraVideoSanitizer.swift
 new file mode 100644
-index 00000000..299696aa
+index 00000000..792c5279
 --- /dev/null
 +++ b/submodules/TelegramCore/Sources/PendingMessages/UltraVideoSanitizer.swift
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,85 @@
 +import Foundation
 +import AVFoundation
 +
@@ -7656,10 +7656,16 @@ index 00000000..299696aa
 +@available(iOS 26.0, macOS 26.0, *)
 +public enum UltraVideoSanitizer {
 +    static func restrictedAsset(at url: URL) -> AVURLAsset {
-+        return AVURLAsset(url: url, options: [
-+            AVURLAssetReferenceRestrictionsKey: NSNumber(value: AVAssetReferenceRestrictions.forbidAll.rawValue),
++        let restrictions = NSNumber(value: AVAssetReferenceRestrictions.forbidAll.rawValue)
++        #if os(macOS)
++        let options: [String: Any] = [
++            AVURLAssetReferenceRestrictionsKey: restrictions,
 +            AVURLAssetShouldSupportAliasDataReferencesKey: false
-+        ])
++        ]
++        #else
++        let options: [String: Any] = [AVURLAssetReferenceRestrictionsKey: restrictions]
++        #endif
++        return AVURLAsset(url: url, options: options)
 +    }
 +
 +    @MainActor public static func prepare(_ workspace: UltraVideoPreparationWorkspace, preserveDimensions: Bool = false) async throws -> Int64 {
