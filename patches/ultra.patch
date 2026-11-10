@@ -11775,7 +11775,7 @@ index 639f1196..2fda3e5a 100644
                      return
                  }
 diff --git a/submodules/TelegramUI/Sources/ChatHistoryEntriesForView.swift b/submodules/TelegramUI/Sources/ChatHistoryEntriesForView.swift
-index 44fec064..40947b64 100644
+index 44fec064..e465612d 100644
 --- a/submodules/TelegramUI/Sources/ChatHistoryEntriesForView.swift
 +++ b/submodules/TelegramUI/Sources/ChatHistoryEntriesForView.swift
 @@ -891,3 +891,20 @@ func chatHistoryEntriesForView(
@@ -11786,7 +11786,7 @@ index 44fec064..40947b64 100644
 +/// Attach display-only history to ordinary text rows. Server messages and stable IDs are unchanged.
 +func ultraHistoryEntriesWithInlinePreviews(_ entries: [ChatHistoryEntry], previews: [Int32: UltraLocalHistoryInlinePreview]) -> [ChatHistoryEntry] {
 +    guard !previews.isEmpty else { return entries }
-+    return entries.map { entry in
++    return entries.map { entry -> ChatHistoryEntry in
 +        guard case let .MessageEntry(message, presentation, read, location, selection, attributes) = entry,
 +              case .none = selection, case .generic = attributes.contentTypeHint,
 +              !presentation.isPreview, message.id.namespace == Namespaces.Message.Cloud,
@@ -11794,38 +11794,66 @@ index 44fec064..40947b64 100644
 +              message.autoclearAttribute == nil, message.autoremoveAttribute == nil,
 +              !message.text.isEmpty, let preview = previews[message.id.id],
 +              preview.peerId == message.id.peerId.toInt64(), preview.messageId == message.id.id else { return entry }
-+        var attributes = attributes
-+        attributes.ultraHistoryPreview = preview
-+        return .MessageEntry(message, presentation, read, location, selection, attributes)
++        var updatedAttributes = attributes
++        updatedAttributes.ultraHistoryPreview = preview
++        return .MessageEntry(message, presentation, read, location, selection, updatedAttributes)
 +    }
 +}
 diff --git a/submodules/TelegramUI/Sources/ChatHistoryListNode.swift b/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
-index 093c9f33..0501bbbc 100644
+index 093c9f33..032f6ae7 100644
 --- a/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
 +++ b/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
-@@ -1957,8 +1957,10 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -85,6 +85,12 @@ enum ChatHistoryViewUpdate {
+     case HistoryView(view: MessageHistoryView, type: ChatHistoryViewUpdateType, scrollPosition: ChatHistoryViewScrollPosition?, flashIndicators: Bool, originalScrollPosition: ChatHistoryViewScrollPosition?, initialData: ChatHistoryCombinedInitialData, id: Int32)
+ }
+ 
++/// Keep the ULTRA state nominal at the large history combineLatest boundary.
++private struct UltraHistoryViewUpdate {
++    let history: (ChatHistoryViewUpdate, Int, ChatHistoryLocationInput?, ClosedRange<Int32>?, Set<MessageId>)
++    let previews: [Int32: UltraLocalHistoryInlinePreview]
++}
++
+ struct ChatHistoryView {
+     let originalView: MessageHistoryView
+     let filteredEntries: [ChatHistoryEntry]
+@@ -1957,8 +1963,15 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
          let startTime = CFAbsoluteTimeGetCurrent()
          var measure_isFirstTime = true
          let messageViewQueue = Queue.mainQueue()
+-        let historyViewTransitionDisposable = (combineLatest(queue: messageViewQueue,
 +        let ultraInlinePeer = mode == .bubbles && tag == nil && subject == nil && !isScheduledMessages ? chatLocation.peerId : nil
-+        let historyWithUltraSignal = combineLatest(historyViewUpdate |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_historyViewUpdate"), context.engine.messages.ultraLocalHistoryInlinePreviews(peerId: ultraInlinePeer))
-         let historyViewTransitionDisposable = (combineLatest(queue: messageViewQueue,
--            historyViewUpdate |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_historyViewUpdate"),
++        let historyWithUltraSignal: Signal<UltraHistoryViewUpdate, NoError> = combineLatest(
+             historyViewUpdate |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_historyViewUpdate"),
++            context.engine.messages.ultraLocalHistoryInlinePreviews(peerId: ultraInlinePeer)
++        ) |> map { update, previews -> UltraHistoryViewUpdate in
++            return UltraHistoryViewUpdate(history: update, previews: previews)
++        }
++        let historyViewTransitionDisposable = (combineLatest(queue: messageViewQueue,
 +            historyWithUltraSignal,
              self.chatPresentationDataPromise.get() |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_chatPresentationData"),
              selectedMessages |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_selectedMessages"),
              updatingMedia |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_updatingMedia"),
-@@ -1984,7 +1986,8 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -1984,7 +1997,9 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
              chatThemes |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_chatThemes"),
              deviceContactsNumbers |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_deviceContactsNumbers"),
              contentSettings |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_contentSettings")
 -        ) |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_firstChatHistoryTransition")).startStrict(next: { [weak self] update, chatPresentationData, selectedMessages, updatingMedia, networkType, preferredStoryHighQuality, animatedEmojiAndGiftStickers, additionalAnimatedEmojiStickers, customChannelDiscussionReadState, customThreadOutgoingReadState, availableReactions, availableMessageEffects, savedMessageTags, defaultReaction, accountPeer, accountCountry, suggestAudioTranscription, promises, topicAuthorId, translationState, maxReadStoryId, recommendedChannels, audioTranscriptionTrial, chatThemes, deviceContactsNumbers, contentSettings in
 +        ) |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_firstChatHistoryTransition")).startStrict(next: { [weak self] historyWithUltra, chatPresentationData, selectedMessages, updatingMedia, networkType, preferredStoryHighQuality, animatedEmojiAndGiftStickers, additionalAnimatedEmojiStickers, customChannelDiscussionReadState, customThreadOutgoingReadState, availableReactions, availableMessageEffects, savedMessageTags, defaultReaction, accountPeer, accountCountry, suggestAudioTranscription, promises, topicAuthorId, translationState, maxReadStoryId, recommendedChannels, audioTranscriptionTrial, chatThemes, deviceContactsNumbers, contentSettings in
-+            let (update, ultraInlinePreviews) = historyWithUltra
++            let update = historyWithUltra.history
++            let ultraInlinePreviews = historyWithUltra.previews
              let (animatedEmojiStickers, premiumGiftStickers, tonGiftStickers) = animatedEmojiAndGiftStickers
              let (historyAppearsCleared, pendingUnpinnedAllMessages, pendingRemovedMessages, currentlyPlayingMessageIdAndType, scrollToMessageId, chatHasBots, allAdMessages) = promises
              
-@@ -2261,7 +2264,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -2085,7 +2100,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+                     let forceSynchronous = true
+                     
+                     let rawTransition = preparedChatHistoryViewTransition(from: previous, to: processedView, reason: reason, reverse: false, chatLocation: chatLocation, source: source, controllerInteraction: controllerInteraction, scrollPosition: nil, scrollAnimationCurve: nil, initialData: initialData?.initialData, keyboardButtonsMessage: nil, cachedData: initialData?.cachedData, cachedDataMessages: initialData?.cachedDataMessages, readStateData: initialData?.readStateData, flashIndicators: false, updatedMessageSelection: previousSelectedMessages != selectedMessages, messageTransitionNode: messageTransitionNode(), allUpdated: false)
+-                    var mappedTransition = mappedChatHistoryViewListTransition(context: context, chatLocation: chatLocation, associatedData: previousViewValue.associatedData, controllerInteraction: controllerInteraction, mode: mode, lastHeaderId: 0, isSavedMusic: isSavedMusic, canReorder: canReorder, richMessageQueueId: richMessageQueueId, animateFromPreviousFilter: resetScrolling, transition: rawTransition, systemStyle: systemStyle)
++                    var mappedTransition: ChatHistoryListViewTransition = mappedChatHistoryViewListTransition(context: context, chatLocation: chatLocation, associatedData: previousViewValue.associatedData, controllerInteraction: controllerInteraction, mode: mode, lastHeaderId: 0, isSavedMusic: isSavedMusic, canReorder: canReorder, richMessageQueueId: richMessageQueueId, animateFromPreviousFilter: resetScrolling, transition: rawTransition, systemStyle: systemStyle)
+                     
+                     if disableAnimations {
+                         mappedTransition.options.remove(.AnimateInsertion)
+@@ -2261,7 +2276,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                  }
                                  
                  let previousChatHistoryEntriesForViewState = chatHistoryEntriesForViewState.with({ $0 })
@@ -11834,14 +11862,23 @@ index 093c9f33..0501bbbc 100644
                      currentState: previousChatHistoryEntriesForViewState,
                      context: context,
                      location: chatLocation,
-@@ -2290,6 +2293,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -2290,6 +2305,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                      isMusicPlaylist: isMusicPlaylist,
                      pinToTopStableId: pinToTopStableId
                  )
-+                let filteredEntries = ultraHistoryEntriesWithInlinePreviews(rawFilteredEntries, previews: ultraInlinePreviews)
++                let filteredEntries: [ChatHistoryEntry] = ultraHistoryEntriesWithInlinePreviews(rawFilteredEntries, previews: ultraInlinePreviews)
                  let lastHeaderId = filteredEntries.last.flatMap { listMessageDateHeaderId(timestamp: $0.index.timestamp) } ?? 0
                  let processedView = ChatHistoryView(originalView: view, filteredEntries: filteredEntries, associatedData: associatedData, lastHeaderId: lastHeaderId, id: id, locationInput: update.2, ignoreMessagesInTimestampRange: update.3, ignoreMessageIds: update.4)
                  let previousValueAndVersion = previousView.swap((processedView, update.1, selectedMessages, allAdMessages.version))
+@@ -2541,7 +2557,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+                 if !updatedScrollPositionHolds, let scrollToItem = rawTransition.scrollToItem {
+                     rawTransition.scrollToItem = scrollToItem.withHold(.none)
+                 }
+-                var mappedTransition = mappedChatHistoryViewListTransition(context: context, chatLocation: chatLocation, associatedData: associatedData, controllerInteraction: controllerInteraction, mode: mode, lastHeaderId: lastHeaderId, isSavedMusic: isSavedMusic, canReorder: processedView.filteredEntries.count > 1 && canReorder, richMessageQueueId: richMessageQueueId, animateFromPreviousFilter: resetScrolling, transition: rawTransition, systemStyle: systemStyle)
++                var mappedTransition: ChatHistoryListViewTransition = mappedChatHistoryViewListTransition(context: context, chatLocation: chatLocation, associatedData: associatedData, controllerInteraction: controllerInteraction, mode: mode, lastHeaderId: lastHeaderId, isSavedMusic: isSavedMusic, canReorder: processedView.filteredEntries.count > 1 && canReorder, richMessageQueueId: richMessageQueueId, animateFromPreviousFilter: resetScrolling, transition: rawTransition, systemStyle: systemStyle)
+                 
+                 if disableAnimations {
+                     mappedTransition.options.remove(.AnimateInsertion)
 diff --git a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift b/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
 index e9c504df..0f1cfb5c 100644
 --- a/submodules/TelegramUI/Sources/ChatInterfaceStateContextMenus.swift
