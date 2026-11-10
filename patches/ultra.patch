@@ -11800,7 +11800,7 @@ index 44fec064..e465612d 100644
 +    }
 +}
 diff --git a/submodules/TelegramUI/Sources/ChatHistoryListNode.swift b/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
-index 093c9f33..4e6956ac 100644
+index 093c9f33..6a79dc25 100644
 --- a/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
 +++ b/submodules/TelegramUI/Sources/ChatHistoryListNode.swift
 @@ -85,6 +85,12 @@ enum ChatHistoryViewUpdate {
@@ -11828,24 +11828,39 @@ index 093c9f33..4e6956ac 100644
 +        ) |> map { update, previews -> UltraHistoryViewUpdate in
 +            return UltraHistoryViewUpdate(history: update, previews: previews)
 +        }
-+        let historyViewTransitionSignal = combineLatest(queue: messageViewQueue,
++        let historyPresentationSignal = combineLatest(queue: messageViewQueue,
 +            historyWithUltraSignal,
              self.chatPresentationDataPromise.get() |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_chatPresentationData"),
              selectedMessages |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_selectedMessages"),
              updatingMedia |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_updatingMedia"),
-@@ -1984,7 +1997,10 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -1970,7 +1983,9 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+             customThreadOutgoingReadState |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_customThreadOutgoingReadState"),
+             availableReactions |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_availableReactions"),
+             availableMessageEffects |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_availableMessageEffects"),
+-            savedMessageTags |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_savedMessageTags"),
++            savedMessageTags |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_savedMessageTags")
++        )
++        let historyContextSignal = combineLatest(queue: messageViewQueue,
+             defaultReaction |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_defaultReaction"),
+             accountPeer |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_accountPeer"),
+             accountCountry |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_accountCountry"),
+@@ -1984,7 +1999,14 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
              chatThemes |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_chatThemes"),
              deviceContactsNumbers |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_deviceContactsNumbers"),
              contentSettings |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_contentSettings")
 -        ) |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_firstChatHistoryTransition")).startStrict(next: { [weak self] update, chatPresentationData, selectedMessages, updatingMedia, networkType, preferredStoryHighQuality, animatedEmojiAndGiftStickers, additionalAnimatedEmojiStickers, customChannelDiscussionReadState, customThreadOutgoingReadState, availableReactions, availableMessageEffects, savedMessageTags, defaultReaction, accountPeer, accountCountry, suggestAudioTranscription, promises, topicAuthorId, translationState, maxReadStoryId, recommendedChannels, audioTranscriptionTrial, chatThemes, deviceContactsNumbers, contentSettings in
-+        ) |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_firstChatHistoryTransition")
-+        let historyViewTransitionDisposable = historyViewTransitionSignal.startStrict(next: { [weak self] historyWithUltra, chatPresentationData, selectedMessages, updatingMedia, networkType, preferredStoryHighQuality, animatedEmojiAndGiftStickers, additionalAnimatedEmojiStickers, customChannelDiscussionReadState, customThreadOutgoingReadState, availableReactions, availableMessageEffects, savedMessageTags, defaultReaction, accountPeer, accountCountry, suggestAudioTranscription, promises, topicAuthorId, translationState, maxReadStoryId, recommendedChannels, audioTranscriptionTrial, chatThemes, deviceContactsNumbers, contentSettings in
++        )
++        let historyViewTransitionSignal = combineLatest(queue: messageViewQueue, historyPresentationSignal, historyContextSignal)
++        |> debug_measureTimeToFirstEvent(label: "chatHistoryNode_firstChatHistoryTransition")
++        let historyViewTransitionDisposable = historyViewTransitionSignal.startStrict(next: { [weak self] presentationValues, contextValues in
++            let (historyWithUltra, chatPresentationData, selectedMessages, updatingMedia, networkType, preferredStoryHighQuality, animatedEmojiAndGiftStickers, additionalAnimatedEmojiStickers, customChannelDiscussionReadState, customThreadOutgoingReadState, availableReactions, availableMessageEffects, savedMessageTags) = presentationValues
++            let (defaultReaction, accountPeer, accountCountry, suggestAudioTranscription, promises, topicAuthorId, translationState, maxReadStoryId, recommendedChannels, audioTranscriptionTrial, chatThemes, deviceContactsNumbers, contentSettings) = contextValues
 +            let update = historyWithUltra.history
 +            let ultraInlinePreviews = historyWithUltra.previews
              let (animatedEmojiStickers, premiumGiftStickers, tonGiftStickers) = animatedEmojiAndGiftStickers
              let (historyAppearsCleared, pendingUnpinnedAllMessages, pendingRemovedMessages, currentlyPlayingMessageIdAndType, scrollToMessageId, chatHasBots, allAdMessages) = promises
              
-@@ -2085,7 +2101,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -2085,7 +2107,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                      let forceSynchronous = true
                      
                      let rawTransition = preparedChatHistoryViewTransition(from: previous, to: processedView, reason: reason, reverse: false, chatLocation: chatLocation, source: source, controllerInteraction: controllerInteraction, scrollPosition: nil, scrollAnimationCurve: nil, initialData: initialData?.initialData, keyboardButtonsMessage: nil, cachedData: initialData?.cachedData, cachedDataMessages: initialData?.cachedDataMessages, readStateData: initialData?.readStateData, flashIndicators: false, updatedMessageSelection: previousSelectedMessages != selectedMessages, messageTransitionNode: messageTransitionNode(), allUpdated: false)
@@ -11854,7 +11869,7 @@ index 093c9f33..4e6956ac 100644
                      
                      if disableAnimations {
                          mappedTransition.options.remove(.AnimateInsertion)
-@@ -2105,18 +2121,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -2105,18 +2127,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                          resetScrolling = false
                      }
                      
@@ -11874,7 +11889,7 @@ index 093c9f33..4e6956ac 100644
                  }
                  
                  Queue.mainQueue().async {
-@@ -2261,7 +2266,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -2261,7 +2272,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                  }
                                  
                  let previousChatHistoryEntriesForViewState = chatHistoryEntriesForViewState.with({ $0 })
@@ -11883,7 +11898,7 @@ index 093c9f33..4e6956ac 100644
                      currentState: previousChatHistoryEntriesForViewState,
                      context: context,
                      location: chatLocation,
-@@ -2290,6 +2295,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -2290,6 +2301,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                      isMusicPlaylist: isMusicPlaylist,
                      pinToTopStableId: pinToTopStableId
                  )
@@ -11891,7 +11906,7 @@ index 093c9f33..4e6956ac 100644
                  let lastHeaderId = filteredEntries.last.flatMap { listMessageDateHeaderId(timestamp: $0.index.timestamp) } ?? 0
                  let processedView = ChatHistoryView(originalView: view, filteredEntries: filteredEntries, associatedData: associatedData, lastHeaderId: lastHeaderId, id: id, locationInput: update.2, ignoreMessagesInTimestampRange: update.3, ignoreMessageIds: update.4)
                  let previousValueAndVersion = previousView.swap((processedView, update.1, selectedMessages, allAdMessages.version))
-@@ -2541,7 +2547,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -2541,7 +2553,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                  if !updatedScrollPositionHolds, let scrollToItem = rawTransition.scrollToItem {
                      rawTransition.scrollToItem = scrollToItem.withHold(.none)
                  }
@@ -11900,7 +11915,7 @@ index 093c9f33..4e6956ac 100644
                  
                  if disableAnimations {
                      mappedTransition.options.remove(.AnimateInsertion)
-@@ -2561,18 +2567,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -2561,18 +2573,7 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
                      resetScrolling = false
                  }
                  
@@ -11920,7 +11935,7 @@ index 093c9f33..4e6956ac 100644
              }
          })
          
-@@ -4117,6 +4112,21 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
+@@ -4117,6 +4118,21 @@ public final class ChatHistoryListNodeImpl: ASDisplayNode, ChatHistoryNode, Chat
          self.maxVisibleIncomingMessageIndex.set(index)
      }
      

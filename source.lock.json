@@ -3,7 +3,7 @@
   "commit": "24638bc69bd083981b178dd1e7f921eebbf7fc46",
   "app_version": "13.2",
   "bundle_id": "app.telegaultra.client",
-  "patch_sha256": "03ebaa76c930666401a1395e02a7f098027db72c9bf62c13a670ab1ba1d81315",
+  "patch_sha256": "f1f32b9b22369247cbc3585c64b34db11988e2aa97c83e55c9f3d9820e492851",
   "rules_apple_commit": "485016eb5b0948cc17307064e7977a6d68e94046",
   "rules_apple_patch_sha256": "08b97f5cea4b87c6534dde04e46940ecf03a974e022e47ac581c0e09faa8e384"
 }
