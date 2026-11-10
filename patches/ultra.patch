@@ -4945,7 +4945,7 @@ index 00000000..483a41fe
 +}
 diff --git a/submodules/SettingsUI/Sources/UltraImageSanitizerController.swift b/submodules/SettingsUI/Sources/UltraImageSanitizerController.swift
 new file mode 100644
-index 00000000..008f1299
+index 00000000..89bbc3c0
 --- /dev/null
 +++ b/submodules/SettingsUI/Sources/UltraImageSanitizerController.swift
 @@ -0,0 +1,183 @@
@@ -4994,7 +4994,7 @@ index 00000000..008f1299
 +        self.presentationDisposable = (context.sharedContext.presentationData |> deliverOnMainQueue).start(next: { [weak self] data in
 +            guard let self = self else { return }
 +            self.presentationData = data
-+            self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: data))
++            self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: data), transition: .immediate)
 +            self.updateColors()
 +        })
 +    }
@@ -5287,7 +5287,7 @@ index 00000000..4872565d
 +}
 diff --git a/submodules/SettingsUI/Sources/UltraLocalGiftGalleryController.swift b/submodules/SettingsUI/Sources/UltraLocalGiftGalleryController.swift
 new file mode 100644
-index 00000000..0053fffb
+index 00000000..fc6eb260
 --- /dev/null
 +++ b/submodules/SettingsUI/Sources/UltraLocalGiftGalleryController.swift
 @@ -0,0 +1,158 @@
@@ -5371,7 +5371,7 @@ index 00000000..0053fffb
 +        self.presentationDisposable = (context.sharedContext.presentationData |> deliverOnMainQueue).start(next: { [weak self] data in
 +            guard let self else { return }
 +            self.presentationData = data
-+            self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: data))
++            self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: data), transition: .immediate)
 +            if self.isNodeLoaded { self.displayNode.backgroundColor = data.theme.list.blocksBackgroundColor }
 +            self.descriptionLabel.textColor = data.theme.list.itemSecondaryTextColor
 +            self.collection.reloadData()
@@ -5662,7 +5662,7 @@ index 00000000..b8b86831
 +}
 diff --git a/submodules/SettingsUI/Sources/UltraLocalStickersController.swift b/submodules/SettingsUI/Sources/UltraLocalStickersController.swift
 new file mode 100644
-index 00000000..b31ef269
+index 00000000..2d9183ac
 --- /dev/null
 +++ b/submodules/SettingsUI/Sources/UltraLocalStickersController.swift
 @@ -0,0 +1,186 @@
@@ -5760,7 +5760,7 @@ index 00000000..b31ef269
 +        self.presentationDisposable = (context.sharedContext.presentationData |> deliverOnMainQueue).start(next: { [weak self] data in
 +            guard let self else { return }
 +            self.presentationData = data
-+            self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: data))
++            self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: data), transition: .immediate)
 +            self.updateColors()
 +        })
 +        self.reload()
@@ -6397,7 +6397,7 @@ index 00000000..adbd9f0d
 +}
 diff --git a/submodules/SettingsUI/Sources/UltraVideoSanitizerController.swift b/submodules/SettingsUI/Sources/UltraVideoSanitizerController.swift
 new file mode 100644
-index 00000000..988cd7c1
+index 00000000..b4a402c7
 --- /dev/null
 +++ b/submodules/SettingsUI/Sources/UltraVideoSanitizerController.swift
 @@ -0,0 +1,217 @@
@@ -6448,7 +6448,7 @@ index 00000000..988cd7c1
 +        self.presentationDisposable = (context.sharedContext.presentationData |> deliverOnMainQueue).start(next: { [weak self] data in
 +            guard let self = self else { return }
 +            self.presentationData = data
-+            self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: data))
++            self.navigationBar?.updatePresentationData(NavigationBarPresentationData(presentationData: data), transition: .immediate)
 +            self.updateColors()
 +        })
 +    }
