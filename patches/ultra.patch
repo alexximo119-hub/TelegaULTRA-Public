@@ -3940,15 +3940,19 @@ index 72585b34..24a27358 100644
      fileprivate func resetIncomingReadStates(_ states: [PeerId: [MessageId.Namespace: PeerReadState]]) {
 diff --git a/submodules/Postbox/Tests/MessageHistoryRemovalHookTests.swift b/submodules/Postbox/Tests/MessageHistoryRemovalHookTests.swift
 new file mode 100644
-index 00000000..51cc43e7
+index 00000000..f1a00822
 --- /dev/null
 +++ b/submodules/Postbox/Tests/MessageHistoryRemovalHookTests.swift
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,159 @@
 +import Foundation
 +import XCTest
 +@testable import Postbox
 +
 +final class MessageHistoryRemovalHookTests: XCTestCase {
++    private struct RemovalCount: Codable {
++        let count: Int32
++    }
++
 +    private var fixture: PostboxFixture!
 +    private let peerId = MessageHistoryTableFixture.peerId(960)
 +    private let otherPeerId = MessageHistoryTableFixture.peerId(961)
@@ -3987,7 +3991,7 @@ index 00000000..51cc43e7
 +                calls += 1
 +                XCTAssertEqual(Set(ids), Set([self.id(1), self.id(2)]))
 +                XCTAssertEqual(ids.compactMap { transaction.getMessage($0)?.text }.sorted(), ["Synthetic 1", "Synthetic 2"])
-+                if let entry = CodableEntry(["count": ids.count]) {
++                if let entry = CodableEntry(RemovalCount(count: Int32(ids.count))) {
 +                    transaction.putItemCacheEntry(id: entryId, entry: entry)
 +                } else { XCTFail("Synthetic cache entry must encode") }
 +            }, forEachMedia: nil)
@@ -3996,7 +4000,7 @@ index 00000000..51cc43e7
 +            XCTAssertNil(transaction.getMessage(self.id(2)))
 +            XCTAssertNotNil(transaction.getMessage(self.id(3, peerId: self.otherPeerId)))
 +            XCTAssertNotNil(transaction.getMessage(self.id(4, namespace: self.namespace + 1)))
-+            XCTAssertEqual(transaction.retrieveItemCacheEntry(id: entryId)?.get([String: Int].self), ["count": 2])
++            XCTAssertEqual(transaction.retrieveItemCacheEntry(id: entryId)?.get(RemovalCount.self)?.count, 2)
 +        }
 +    }
 +
@@ -4162,14 +4166,18 @@ index 00000000..c342cef0
 +}
 diff --git a/submodules/Postbox/Tests/UltraItemCacheIsolationTests.swift b/submodules/Postbox/Tests/UltraItemCacheIsolationTests.swift
 new file mode 100644
-index 00000000..f10d1ee6
+index 00000000..a6288962
 --- /dev/null
 +++ b/submodules/Postbox/Tests/UltraItemCacheIsolationTests.swift
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,29 @@
 +import XCTest
 +@testable import Postbox
 +
 +final class UltraItemCacheIsolationTests: XCTestCase {
++    private struct CacheValue: Codable {
++        let value: String
++    }
++
 +    func testNegativeForkCollectionDoesNotReadOrClearNativeAgentOrAppCollections() {
 +        let fixture = PostboxFixture(name: "UltraItemCacheIsolationTests")
 +        defer { fixture.close() }
@@ -4180,14 +4188,14 @@ index 00000000..f10d1ee6
 +            let nativeAgent = ItemCacheEntryId(collectionId: 63, key: key)
 +            let app = ItemCacheEntryId(collectionId: 64, key: key)
 +            for (id, value) in [(fork, "fork"), (nativeAgent, "native"), (app, "app")] {
-+                guard let entry = CodableEntry(["value": value]) else { return XCTFail("Synthetic value must encode") }
++                guard let entry = CodableEntry(CacheValue(value: value)) else { return XCTFail("Synthetic value must encode") }
 +                transaction.putItemCacheEntry(id: id, entry: entry)
 +            }
-+            XCTAssertEqual(transaction.retrieveItemCacheEntry(id: fork)?.get([String: String].self), ["value": "fork"])
++            XCTAssertEqual(transaction.retrieveItemCacheEntry(id: fork)?.get(CacheValue.self)?.value, "fork")
 +            transaction.clearItemCacheCollection(collectionId: -128)
 +            XCTAssertNil(transaction.retrieveItemCacheEntry(id: fork))
-+            XCTAssertEqual(transaction.retrieveItemCacheEntry(id: nativeAgent)?.get([String: String].self), ["value": "native"])
-+            XCTAssertEqual(transaction.retrieveItemCacheEntry(id: app)?.get([String: String].self), ["value": "app"])
++            XCTAssertEqual(transaction.retrieveItemCacheEntry(id: nativeAgent)?.get(CacheValue.self)?.value, "native")
++            XCTAssertEqual(transaction.retrieveItemCacheEntry(id: app)?.get(CacheValue.self)?.value, "app")
 +        }
 +    }
 +}
